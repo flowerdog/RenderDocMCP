@@ -12,6 +12,11 @@ import sys
 import time
 import signal
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+from socketserver import ThreadingMixIn
+
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
 
 
 class ExportHandler(SimpleHTTPRequestHandler):
@@ -32,6 +37,12 @@ class ExportHandler(SimpleHTTPRequestHandler):
                 continue
             result = os.path.join(result, part)
         return result
+
+    def handle(self):
+        try:
+            super().handle()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            self.log_message("Client disconnected during transfer")
 
     def log_message(self, fmt, *args):
         print("[FileServer] %s" % (fmt % args), flush=True)
@@ -80,7 +91,7 @@ def main():
 
     ExportHandler.export_dir = export_dir
 
-    server = HTTPServer(("0.0.0.0", port), ExportHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", port), ExportHandler)
 
     def shutdown_handler(signum, frame):
         print("\n[FileServer] Shutting down...", flush=True)
