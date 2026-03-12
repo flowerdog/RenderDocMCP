@@ -58,10 +58,20 @@ RenderDocMCP/
 | `get_shader_info` | Shader 源码 / 常量缓冲区 |
 | `get_buffer_contents` | 获取缓冲区数据（支持偏移/长度指定） |
 | `get_texture_info` | 纹理元数据 |
-| `get_texture_data` | 纹理像素数据（支持 mip/slice/3D 切片） |
+| `get_texture_data` | 纹理像素数据（⚠️ 仅限像素级识别/分析场景，见下方说明） |
 | `get_pipeline_state` | 完整管线状态 |
 | `export_texture` | 导出纹理为 PNG 文件，返回下载 URL（不经过模型） |
 | `export_mesh` | 导出 Draw Call 的 Mesh 为 OBJ 文件，返回下载 URL |
+
+### ⚠️ get_texture_data 使用限制
+
+`get_texture_data` 会将像素数据直接传入模型上下文，开销极大。**仅在以下场景使用**：
+- 需要对像素值做程序化识别或数值分析（如检查特定像素颜色、验证渲染结果正确性）
+
+**禁止使用的场景**（一律改用 `export_texture`）：
+- 导出 / 下载 / 保存图片
+- 查看纹理的视觉内容
+- 任何不涉及像素级数据分析的需求
 
 ### get_draw_calls 过滤选项
 
