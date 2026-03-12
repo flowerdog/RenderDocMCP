@@ -177,7 +177,9 @@ export_mesh(event_id=100)
 | `RENDERDOC_MCP_FILE_SERVER_PORT` | `19877` | HTTP 文件服务端口 |
 | `RENDERDOC_MCP_EXPORT_DIR` | `%TEMP%\renderdoc_mcp_exports` | 导出文件存储目录 |
 | `RENDERDOC_MCP_EXPORT_RETENTION_DAYS` | `7` | 文件保留天数（0=不自动清理） |
+| `RENDERDOC_MCP_EXTERNAL_HOST` | 自动检测 LAN IP | 导出 URL 中使用的主机地址 |
 
+URL 中的主机地址默认自动检测本机 LAN IP。如果自动检测不准确，可通过 `RENDERDOC_MCP_EXTERNAL_HOST` 显式指定。
 在 RenderDoc 启动前设置环境变量即可生效。
 
 ## 系统要求

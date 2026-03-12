@@ -4,6 +4,7 @@ Provides TCP socket server for external MCP server communication.
 """
 
 import os
+import socket
 import tempfile
 
 from . import socket_server
@@ -28,6 +29,37 @@ _export_dir = os.environ.get(
     os.path.join(tempfile.gettempdir(), "renderdoc_mcp_exports"),
 )
 _export_retention_days = int(os.environ.get("RENDERDOC_MCP_EXPORT_RETENTION_DAYS", "7"))
+
+
+def _resolve_external_host(bind_host):
+    """Resolve an externally reachable IP for URLs.
+
+    When the bind address is 0.0.0.0 (all interfaces), we need an actual IP
+    that remote clients can connect to. Priority:
+    1. RENDERDOC_MCP_EXTERNAL_HOST env var (explicit override)
+    2. LAN IP detected via UDP socket trick
+    3. Fallback to 127.0.0.1
+    """
+    explicit = os.environ.get("RENDERDOC_MCP_EXTERNAL_HOST")
+    if explicit:
+        return explicit
+
+    if bind_host not in ("0.0.0.0", "", "::"):
+        return bind_host
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        pass
+
+    try:
+        return socket.gethostbyname(socket.gethostname())
+    except Exception:
+        return "127.0.0.1"
 
 # Try to import qrenderdoc for UI integration (only available in RenderDoc)
 try:
@@ -58,7 +90,9 @@ def register(version, ctx):
     )
     _file_server.start()
 
-    file_server_base_url = "http://%s:%d" % (_host, _file_server_port)
+    external_host = _resolve_external_host(_host)
+    file_server_base_url = "http://%s:%d" % (external_host, _file_server_port)
+    print("[MCP Bridge] File server URL base: %s" % file_server_base_url)
 
     # Create facade and handler
     facade = renderdoc_facade.RenderDocFacade(

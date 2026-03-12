@@ -155,6 +155,9 @@ TCP Socket（长度前缀帧协议）：
 | `RENDERDOC_MCP_FILE_SERVER_PORT` | `19877` | HTTP 文件服务端口 |
 | `RENDERDOC_MCP_EXPORT_DIR` | `%TEMP%\renderdoc_mcp_exports` | 导出文件存储目录 |
 | `RENDERDOC_MCP_EXPORT_RETENTION_DAYS` | `7` | 文件保留天数（0=不自动清理） |
+| `RENDERDOC_MCP_EXTERNAL_HOST` | 自动检测 LAN IP | 导出 URL 中使用的主机地址（覆盖自动检测） |
+
+URL 主机地址解析优先级：`RENDERDOC_MCP_EXTERNAL_HOST` > 绑定地址（非 0.0.0.0 时直接使用）> UDP 探测 LAN IP > `socket.gethostbyname()` > `127.0.0.1`
 
 ## 开发笔记
 

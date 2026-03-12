@@ -30,6 +30,25 @@ class ExportService(object):
     def _build_url(self, filename):
         return "%s/%s" % (self.base_url, filename)
 
+    def _get_capture_tag(self):
+        """Get a short tag from the current capture filename for use in export filenames."""
+        try:
+            cap_path = self.ctx.GetCaptureFilename()
+            if cap_path:
+                basename = os.path.basename(cap_path)
+                name, _ = os.path.splitext(basename)
+                # Sanitize: keep only alphanumeric, dash, underscore, dot
+                safe = ""
+                for ch in name:
+                    if ch.isalnum() or ch in ("-", "_", "."):
+                        safe += ch
+                    else:
+                        safe += "_"
+                return safe
+        except Exception:
+            pass
+        return "capture"
+
     # ======================== Texture Export ========================
 
     def export_texture(self, resource_id, event_id, mip=0, slice_index=0):
@@ -40,7 +59,8 @@ class ExportService(object):
         self._ensure_export_dir()
 
         numeric_id = Parsers.extract_numeric_id(resource_id)
-        filename = "tex_%d_eid%d_mip%d.png" % (numeric_id, event_id, mip)
+        tag = self._get_capture_tag()
+        filename = "%s_tex_%d_eid%d_mip%d.png" % (tag, numeric_id, event_id, mip)
         output_path = os.path.join(self.export_dir, filename)
 
         result = {"data": None, "error": None}
@@ -106,7 +126,8 @@ class ExportService(object):
 
         self._ensure_export_dir()
 
-        filename = "mesh_eid%d.obj" % event_id
+        tag = self._get_capture_tag()
+        filename = "%s_mesh_eid%d.obj" % (tag, event_id)
         output_path = os.path.join(self.export_dir, filename)
 
         result = {"data": None, "error": None}
