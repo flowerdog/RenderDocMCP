@@ -54,7 +54,11 @@ uv tool update-shell  # 添加到 PATH
 {
   "mcpServers": {
     "renderdoc": {
-      "command": "renderdoc-mcp"
+      "command": "renderdoc-mcp",
+      "env": {
+        "RENDERDOC_MCP_HOST": "192.168.1.100",
+        "RENDERDOC_MCP_PORT": "19876"
+      }
     }
   }
 }
@@ -68,11 +72,18 @@ uv tool update-shell  # 添加到 PATH
 {
   "mcpServers": {
     "renderdoc": {
-      "command": "renderdoc-mcp"
+      "command": "renderdoc-mcp",
+      "env": {
+        "RENDERDOC_MCP_HOST": "192.168.1.100",
+        "RENDERDOC_MCP_PORT": "19876"
+      }
     }
   }
 }
 ```
+
+将 `RENDERDOC_MCP_HOST` 替换为 RenderDoc 所在机器的 IP（例如同局域网调试机 IP）。
+`RENDERDOC_MCP_PORT` 默认为 `19876`，仅在你修改过扩展监听端口时才需要同步调整。
 
 ## 使用方法
 
