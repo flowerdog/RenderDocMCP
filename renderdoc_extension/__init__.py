@@ -15,7 +15,7 @@ _server = None
 _version = ""
 
 # Server config via environment variables (set before launching RenderDoc)
-_host = os.environ.get("RENDERDOC_MCP_HOST", "127.0.0.1")
+_host = os.environ.get("RENDERDOC_MCP_HOST", "0.0.0.0")
 _port = int(os.environ.get("RENDERDOC_MCP_PORT", "19876"))
 
 # Try to import qrenderdoc for UI integration (only available in RenderDoc)

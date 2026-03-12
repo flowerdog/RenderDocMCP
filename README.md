@@ -9,9 +9,9 @@ Claude/AI Client (stdio)
         │
         ▼
 MCP Server Process (Python + FastMCP 2.0)
-        │ TCP Socket (默认 127.0.0.1:19876)
+        │ TCP Socket (默认端口 19876)
         ▼
-RenderDoc Process (Extension)
+RenderDoc Process (Extension, 监听 0.0.0.0)
 ```
 
 RenderDoc 内置 Python 默认不包含 `_socket.pyd`，需从标准 CPython 手动补充后方可使用 TCP 通信（详见 `docs/tcp-migration-plan.md`）。

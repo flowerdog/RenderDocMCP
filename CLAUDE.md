@@ -11,9 +11,9 @@ Claude/AI Client (stdio)
         │
         ▼
 MCP Server Process (标准 Python + FastMCP 2.0)
-        │ TCP Socket (默认 127.0.0.1:19876)
+        │ TCP Socket (默认端口 19876)
         ▼
-RenderDoc Process (Extension + 非阻塞 Socket + QTimer)
+RenderDoc Process (Extension + 非阻塞 Socket + QTimer, 监听 0.0.0.0)
 ```
 
 ## 项目结构
@@ -116,7 +116,8 @@ get_action_timings(marker_filter="Camera.Render", exclude_markers=["GUI.Repaint"
 ## 通信协议
 
 TCP Socket（长度前缀帧协议）：
-- 默认连接地址：`127.0.0.1:19876`
+- RenderDoc 端默认监听：`0.0.0.0:19876`（所有网络接口）
+- MCP Server 端默认连接：`127.0.0.1:19876`
 - 帧格式：`[4 字节载荷长度 (big-endian)] + [JSON 载荷 (UTF-8)]`
 - RenderDoc 端：非阻塞 Socket + QTimer（10ms 轮询）
 - MCP Server 端：标准 socket 模块 + 懒连接 + 自动重连

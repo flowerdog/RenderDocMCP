@@ -42,7 +42,7 @@ RenderDoc Process (Extension)
 ```
 MCP Server Process (标准 Python)
  │
- │  TCP 连接 (host:port, 默认 127.0.0.1:19876)
+ │  TCP 连接 (host:port, 服务端默认监听 0.0.0.0:19876)
  │  长度前缀帧协议
  ▼
 RenderDoc Process (Extension, 非阻塞 socket + QTimer 10ms 轮询)
@@ -127,7 +127,7 @@ RenderDoc Process (Extension, 非阻塞 socket + QTimer 10ms 轮询)
 
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
-| `RENDERDOC_MCP_HOST` | `127.0.0.1` | RenderDoc TCP 服务端地址 |
+| `RENDERDOC_MCP_HOST` | `0.0.0.0` | RenderDoc TCP 服务端监听地址 |
 | `RENDERDOC_MCP_PORT` | `19876` | RenderDoc TCP 服务端端口 |
 
 ## 故障排查
@@ -137,4 +137,4 @@ RenderDoc Process (Extension, 非阻塞 socket + QTimer 10ms 轮询)
 | MCP 连接超时 | RenderDoc 未启动或扩展未加载 | 检查 RenderDoc Python Shell 输出 |
 | `No module named '_socket'` | RenderDoc 升级后 `_socket.pyd` 丢失 | 重新补充对应版本的 `_socket.pyd` |
 | 连接被拒绝 | 端口冲突或防火墙 | 检查端口占用，更换端口 |
-| 远程连接失败 | 监听地址为 127.0.0.1 | 改为 `0.0.0.0`（注意安全性） |
+| 远程连接失败 | 防火墙或网络隔离 | 检查防火墙规则，确认端口开放 |
