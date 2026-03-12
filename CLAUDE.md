@@ -146,8 +146,8 @@ TCP Socket（长度前缀帧协议）：
 
 ### HTTP 文件服务（导出下载）
 
-- RenderDoc 端默认监听：`0.0.0.0:19877`（daemon 线程）
-- 仅提供导出目录内的静态文件下载
+- 独立进程运行：插件加载时自动用系统 Python 启动独立终端窗口
+- 监听 `0.0.0.0:{port}`，仅提供导出目录内的静态文件下载
 - 环境变量配置：
 
 | 环境变量 | 默认值 | 说明 |
@@ -156,6 +156,7 @@ TCP Socket（长度前缀帧协议）：
 | `RENDERDOC_MCP_EXPORT_DIR` | `%TEMP%\renderdoc_mcp_exports` | 导出文件存储目录 |
 | `RENDERDOC_MCP_EXPORT_RETENTION_DAYS` | `7` | 文件保留天数（0=不自动清理） |
 | `RENDERDOC_MCP_EXTERNAL_HOST` | 自动检测 LAN IP | 导出 URL 中使用的主机地址（覆盖自动检测） |
+| `RENDERDOC_MCP_PYTHON` | 自动查找 | 系统 Python 路径（用于启动文件服务进程） |
 
 URL 主机地址解析优先级：`RENDERDOC_MCP_EXTERNAL_HOST` > 绑定地址（非 0.0.0.0 时直接使用）> UDP 探测 LAN IP > `socket.gethostbyname()` > `127.0.0.1`
 

@@ -1,142 +1,131 @@
 """
-HTTP File Server for RenderDoc MCP Export.
-Serves exported files (textures, meshes) via HTTP for remote download.
-Uses a daemon thread so it terminates when RenderDoc exits.
+HTTP File Server launcher for RenderDoc MCP Export.
 
-Compatible with Python 3.6 (no f-strings, no SimpleHTTPRequestHandler(directory=)).
+Instead of running http.server inside RenderDoc's limited embedded Python,
+we launch a separate process using the system Python. This gives us:
+- A full-featured Python environment (not RenderDoc's stripped 3.6)
+- A dedicated console window for visibility
+- Process-level isolation from RenderDoc's Qt event loop
+- Stability independent of RenderDoc's internal state
+
+Compatible with Python 3.6 (this file runs inside RenderDoc).
 """
 
 import os
-import time
-import threading
-
-try:
-    from http.server import HTTPServer as _HTTPServer, SimpleHTTPRequestHandler
-    import socketserver
-
-    class _SafeHTTPServer(_HTTPServer):
-        """HTTPServer subclass that avoids socket.getfqdn() in server_bind.
-
-        RenderDoc's embedded Python lacks the 'idna' encoding codec required
-        by socket.getfqdn(), so we skip that call entirely.
-        """
-
-        def server_bind(self):
-            socketserver.TCPServer.server_bind(self)
-            host, port = self.server_address[:2]
-            self.server_name = host or "0.0.0.0"
-            self.server_port = port
-
-except ImportError:
-    _SafeHTTPServer = None
-    SimpleHTTPRequestHandler = object
+import subprocess
+import sys
 
 
-def _make_handler_class(export_dir):
-    """Create a handler class bound to the given export directory."""
+def _find_system_python():
+    """Find a usable system Python executable (not RenderDoc's embedded one).
 
-    class ExportFileHandler(SimpleHTTPRequestHandler):
-        """Serves files from the configured export directory."""
+    Search order:
+    1. RENDERDOC_MCP_PYTHON env var (explicit override)
+    2. 'py -3' (Windows Python Launcher - most reliable on Windows)
+    3. 'python' from PATH (check it's not RenderDoc's embedded one)
+    """
+    explicit = os.environ.get("RENDERDOC_MCP_PYTHON")
+    if explicit and os.path.isfile(explicit):
+        return explicit
 
-        _export_dir = export_dir
-
-        def translate_path(self, path):
-            # Python 3.6 SimpleHTTPRequestHandler.translate_path uses os.getcwd().
-            # We override to map all requests to our export directory.
-            try:
-                from urllib.parse import unquote
-            except ImportError:
-                from urllib import unquote
-            import posixpath
-
-            path = unquote(path)
-            path = posixpath.normpath(path)
-            parts = path.split("/")
-            result = self._export_dir
-            for part in parts:
-                if not part or part == "." or part == "..":
-                    continue
-                result = os.path.join(result, part)
-            return result
-
-        def log_message(self, format, *args):
-            print("[MCP FileServer] %s" % (format % args))
-
-    return ExportFileHandler
-
-
-def cleanup_expired_files(export_dir, retention_days):
-    """Remove files older than retention_days from export_dir."""
-    if retention_days <= 0:
-        return 0
-
-    cutoff = time.time() - (retention_days * 86400)
-    removed = 0
-
+    # Try Windows Python Launcher
     try:
-        for name in os.listdir(export_dir):
-            filepath = os.path.join(export_dir, name)
-            if not os.path.isfile(filepath):
-                continue
-            try:
-                if os.stat(filepath).st_mtime < cutoff:
-                    os.remove(filepath)
-                    removed += 1
-            except OSError:
-                pass
-    except OSError:
+        proc = subprocess.Popen(
+            ["py", "-3", "-c", "import sys; print(sys.executable)"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        stdout, _ = proc.communicate(timeout=5)
+        if proc.returncode == 0:
+            exe = stdout.decode("utf-8", errors="replace").strip()
+            if exe and os.path.isfile(exe):
+                return exe
+    except Exception:
         pass
 
-    if removed > 0:
-        print("[MCP FileServer] Cleaned up %d expired file(s)" % removed)
-    return removed
+    # Try 'python' from PATH, verify it has http.server (not RenderDoc's)
+    try:
+        proc = subprocess.Popen(
+            ["python", "-c", "import http.server; import sys; print(sys.executable)"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        stdout, _ = proc.communicate(timeout=5)
+        if proc.returncode == 0:
+            exe = stdout.decode("utf-8", errors="replace").strip()
+            if exe and os.path.isfile(exe):
+                return exe
+    except Exception:
+        pass
+
+    return None
 
 
 class ExportFileServer(object):
-    """HTTP server that serves exported files from a directory."""
+    """Launches the HTTP file server as a separate process with its own console."""
 
     def __init__(self, export_dir, port=19877, retention_days=7):
         self.export_dir = export_dir
         self.port = port
         self.retention_days = retention_days
-        self._httpd = None
-        self._thread = None
+        self._process = None
 
     def start(self):
-        """Start the HTTP file server in a daemon thread."""
-        if _SafeHTTPServer is None:
-            print("[MCP FileServer] http.server not available, skipping")
+        """Start the file server in a new process with a visible console window."""
+        python_exe = _find_system_python()
+        if python_exe is None:
+            print("[MCP FileServer] ERROR: Cannot find system Python.")
+            print("[MCP FileServer] Set RENDERDOC_MCP_PYTHON to the Python executable path.")
             return False
 
         if not os.path.isdir(self.export_dir):
             os.makedirs(self.export_dir)
 
-        cleanup_expired_files(self.export_dir, self.retention_days)
+        script_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "file_server_process.py",
+        )
 
-        handler_class = _make_handler_class(self.export_dir)
-
-        try:
-            self._httpd = _SafeHTTPServer(("0.0.0.0", self.port), handler_class)
-        except OSError as e:
-            print("[MCP FileServer] Failed to bind port %d: %s" % (self.port, e))
+        if not os.path.isfile(script_path):
+            print("[MCP FileServer] ERROR: Server script not found: %s" % script_path)
             return False
 
-        self._thread = threading.Thread(target=self._httpd.serve_forever)
-        self._thread.daemon = True
-        self._thread.start()
+        cmd = [
+            python_exe,
+            script_path,
+            self.export_dir,
+            str(self.port),
+            str(self.retention_days),
+        ]
 
-        print("[MCP FileServer] Serving exports from '%s' on port %d"
-              % (self.export_dir, self.port))
+        try:
+            # CREATE_NEW_CONSOLE = 0x10 gives the process its own visible terminal
+            self._process = subprocess.Popen(
+                cmd,
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
+        except Exception as e:
+            print("[MCP FileServer] Failed to start server process: %s" % str(e))
+            return False
+
+        print("[MCP FileServer] Started (pid=%d, python=%s, port=%d)"
+              % (self._process.pid, python_exe, self.port))
         return True
 
     def stop(self):
-        """Shutdown the HTTP server."""
-        if self._httpd:
-            self._httpd.shutdown()
-            self._httpd = None
-        self._thread = None
-        print("[MCP FileServer] Stopped")
+        """Terminate the file server process."""
+        if self._process is not None:
+            try:
+                self._process.terminate()
+                self._process.wait(timeout=5)
+            except Exception:
+                try:
+                    self._process.kill()
+                except Exception:
+                    pass
+            self._process = None
+            print("[MCP FileServer] Stopped")
 
     def is_running(self):
-        """Check if the server is running."""
-        return self._thread is not None and self._thread.is_alive()
+        """Check if the server process is still alive."""
+        if self._process is None:
+            return False
+        return self._process.poll() is None
