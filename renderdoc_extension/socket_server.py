@@ -1,109 +1,168 @@
 """
-File-based IPC Server for RenderDoc MCP Bridge
-Uses file polling since RenderDoc's Python doesn't have socket/QtNetwork modules.
+TCP Socket Server for RenderDoc MCP Bridge
+Uses non-blocking sockets with QTimer polling to integrate with Qt event loop.
+
+Protocol: 4-byte big-endian length prefix + JSON payload (UTF-8)
 """
 
 import json
-import os
+import socket
+import struct
 import traceback
-import tempfile
 
 from PySide2.QtCore import QObject, QTimer
 
 
-# IPC directory
-IPC_DIR = os.path.join(tempfile.gettempdir(), "renderdoc_mcp")
-REQUEST_FILE = os.path.join(IPC_DIR, "request.json")
-RESPONSE_FILE = os.path.join(IPC_DIR, "response.json")
-LOCK_FILE = os.path.join(IPC_DIR, "lock")
-
-
 class MCPBridgeServer(QObject):
-    """File-based IPC server for MCP bridge communication"""
+    """Non-blocking TCP server for MCP bridge communication"""
+
+    HEADER_SIZE = 4
+    RECV_BUFSIZE = 262144  # 256 KB
 
     def __init__(self, host, port, handler, parent=None):
         super(MCPBridgeServer, self).__init__(parent)
+        self.host = host
+        self.port = port
         self.handler = handler
+        self._server_socket = None
+        self._client_socket = None
+        self._recv_buffer = b""
         self._timer = None
         self._running = False
 
-        # Create IPC directory
-        if not os.path.exists(IPC_DIR):
-            os.makedirs(IPC_DIR)
-
     def start(self):
-        """Start the server with polling"""
+        """Start the TCP server"""
+        self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._server_socket.setblocking(False)
+        self._server_socket.bind((self.host, self.port))
+        self._server_socket.listen(1)
         self._running = True
 
-        # Clean up old files
-        self._cleanup_files()
-
-        # Start polling timer (check every 100ms)
         self._timer = QTimer(self)
-        self._timer.timeout.connect(self._poll_request)
-        self._timer.start(100)
+        self._timer.timeout.connect(self._poll)
+        self._timer.start(10)
 
-        print("[MCP Bridge] File-based IPC server started")
-        print("[MCP Bridge] IPC directory: %s" % IPC_DIR)
+        print("[MCP Bridge] TCP server listening on %s:%d" % (self.host, self.port))
         return True
 
     def stop(self):
-        """Stop the server"""
+        """Stop the server and clean up"""
         self._running = False
         if self._timer:
             self._timer.stop()
             self._timer = None
-        self._cleanup_files()
-        print("[MCP Bridge] Server stopped")
+        self._close_client()
+        if self._server_socket:
+            try:
+                self._server_socket.close()
+            except Exception:
+                pass
+            self._server_socket = None
+        print("[MCP Bridge] TCP server stopped")
 
     def is_running(self):
         """Check if server is running"""
         return self._running
 
-    def _cleanup_files(self):
-        """Remove IPC files"""
-        for f in [REQUEST_FILE, RESPONSE_FILE, LOCK_FILE]:
+    def _close_client(self):
+        """Close current client connection"""
+        if self._client_socket:
             try:
-                if os.path.exists(f):
-                    os.remove(f)
+                self._client_socket.close()
             except Exception:
                 pass
+            self._client_socket = None
+            self._recv_buffer = b""
 
-    def _poll_request(self):
-        """Check for incoming request"""
+    def _poll(self):
+        """Non-blocking poll: accept connections and read/process data"""
         if not self._running:
             return
 
-        # Check if request file exists
-        if not os.path.exists(REQUEST_FILE):
+        if self._client_socket is None:
+            self._try_accept()
             return
 
-        # Check if lock file exists (client is still writing)
-        if os.path.exists(LOCK_FILE):
+        self._try_recv()
+        self._process_messages()
+
+    def _try_accept(self):
+        """Try to accept a new client connection (non-blocking)"""
+        try:
+            client, addr = self._server_socket.accept()
+            client.setblocking(False)
+            self._client_socket = client
+            self._recv_buffer = b""
+            print("[MCP Bridge] Client connected from %s:%d" % (addr[0], addr[1]))
+        except BlockingIOError:
+            pass
+        except Exception as e:
+            print("[MCP Bridge] Accept error: %s" % str(e))
+
+    def _try_recv(self):
+        """Try to read available data from client (non-blocking)"""
+        try:
+            data = self._client_socket.recv(self.RECV_BUFSIZE)
+            if not data:
+                print("[MCP Bridge] Client disconnected")
+                self._close_client()
+                return
+            self._recv_buffer += data
+        except BlockingIOError:
+            pass
+        except (ConnectionError, OSError):
+            print("[MCP Bridge] Client connection lost")
+            self._close_client()
+
+    def _process_messages(self):
+        """Extract and handle complete length-prefixed messages from buffer"""
+        if self._client_socket is None:
+            return
+
+        while len(self._recv_buffer) >= self.HEADER_SIZE:
+            msg_len = struct.unpack("!I", self._recv_buffer[:self.HEADER_SIZE])[0]
+            total_len = self.HEADER_SIZE + msg_len
+            if len(self._recv_buffer) < total_len:
+                break
+
+            msg_data = self._recv_buffer[self.HEADER_SIZE:total_len]
+            self._recv_buffer = self._recv_buffer[total_len:]
+            self._handle_message(msg_data)
+
+    def _handle_message(self, data):
+        """Decode JSON request, dispatch to handler, send response"""
+        try:
+            request = json.loads(data.decode("utf-8"))
+        except Exception as e:
+            print("[MCP Bridge] Invalid JSON: %s" % str(e))
+            response = {
+                "id": None,
+                "error": {"code": -32700, "message": "Parse error: %s" % str(e)}
+            }
+            self._send_response(response)
             return
 
         try:
-            # Read request
-            with open(REQUEST_FILE, "r", encoding="utf-8") as f:
-                request = json.load(f)
-
-            # Remove request file
-            os.remove(REQUEST_FILE)
-
-            # Process request
-            try:
-                response = self.handler.handle(request)
-            except Exception as e:
-                traceback.print_exc()
-                response = {
-                    "id": request.get("id"),
-                    "error": {"code": -32603, "message": str(e)}
-                }
-
-            # Write response
-            with open(RESPONSE_FILE, "w", encoding="utf-8") as f:
-                json.dump(response, f)
-
+            response = self.handler.handle(request)
         except Exception as e:
-            print("[MCP Bridge] Error processing request: %s" % str(e))
             traceback.print_exc()
+            response = {
+                "id": request.get("id"),
+                "error": {"code": -32603, "message": str(e)}
+            }
+
+        self._send_response(response)
+
+    def _send_response(self, response):
+        """Encode and send a length-prefixed JSON response"""
+        if self._client_socket is None:
+            return
+
+        try:
+            payload = json.dumps(response).encode("utf-8")
+            frame = struct.pack("!I", len(payload)) + payload
+            self._client_socket.sendall(frame)
+        except Exception as e:
+            print("[MCP Bridge] Send error: %s" % str(e))
+            self._close_client()

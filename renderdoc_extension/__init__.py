@@ -1,7 +1,9 @@
 """
 RenderDoc MCP Bridge Extension
-Provides socket server for external MCP server communication.
+Provides TCP socket server for external MCP server communication.
 """
+
+import os
 
 from . import socket_server
 from . import request_handler
@@ -11,6 +13,10 @@ from . import renderdoc_facade
 _context = None
 _server = None
 _version = ""
+
+# Server config via environment variables (set before launching RenderDoc)
+_host = os.environ.get("RENDERDOC_MCP_HOST", "127.0.0.1")
+_port = int(os.environ.get("RENDERDOC_MCP_PORT", "19876"))
 
 # Try to import qrenderdoc for UI integration (only available in RenderDoc)
 try:
@@ -37,9 +43,8 @@ def register(version, ctx):
     facade = renderdoc_facade.RenderDocFacade(ctx)
     handler = request_handler.RequestHandler(facade)
 
-    # Start socket server
     _server = socket_server.MCPBridgeServer(
-        host="127.0.0.1", port=19876, handler=handler
+        host=_host, port=_port, handler=handler
     )
     _server.start()
 
@@ -53,7 +58,6 @@ def register(version, ctx):
             print("[MCP Bridge] Could not register menu: %s" % str(e))
 
     print("[MCP Bridge] Extension loaded (RenderDoc %s)" % version)
-    print("[MCP Bridge] Server listening on 127.0.0.1:19876")
 
 
 def unregister():
@@ -69,7 +73,8 @@ def _show_status(ctx, data):
     """Show status dialog"""
     if _server and _server.is_running():
         ctx.Extensions().MessageDialog(
-            "MCP Bridge is running on port 19876", "MCP Bridge Status"
+            "MCP Bridge TCP server is running on %s:%d" % (_server.host, _server.port),
+            "MCP Bridge Status",
         )
     else:
         ctx.Extensions().ErrorDialog("MCP Bridge is not running", "MCP Bridge Status")
