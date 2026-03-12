@@ -28,6 +28,8 @@ class RequestHandler:
             "get_pipeline_state": self._handle_get_pipeline_state,
             "list_captures": self._handle_list_captures,
             "open_capture": self._handle_open_capture,
+            "export_texture": self._handle_export_texture,
+            "export_mesh": self._handle_export_mesh,
         }
 
     def handle(self, request):
@@ -183,3 +185,22 @@ class RequestHandler:
         if capture_path is None:
             raise ValueError("capture_path is required")
         return self.facade.open_capture(capture_path)
+
+    def _handle_export_texture(self, params):
+        """Handle export_texture request"""
+        resource_id = params.get("resource_id")
+        if resource_id is None:
+            raise ValueError("resource_id is required")
+        event_id = params.get("event_id")
+        if event_id is None:
+            raise ValueError("event_id is required")
+        mip = params.get("mip", 0)
+        slice_index = params.get("slice", 0)
+        return self.facade.export_texture(resource_id, int(event_id), mip, slice_index)
+
+    def _handle_export_mesh(self, params):
+        """Handle export_mesh request"""
+        event_id = params.get("event_id")
+        if event_id is None:
+            raise ValueError("event_id is required")
+        return self.facade.export_mesh(int(event_id))

@@ -12,6 +12,8 @@ MCP Server Process (Python + FastMCP 2.0)
         │ TCP Socket (默认端口 19876)
         ▼
 RenderDoc Process (Extension, 监听 0.0.0.0)
+        │
+        └── HTTP File Server (端口 19877, 导出文件下载)
 ```
 
 RenderDoc 内置 Python 默认不包含 `_socket.pyd`，需从标准 CPython 手动补充后方可使用 TCP 通信（详见 `docs/tcp-migration-plan.md`）。
@@ -102,6 +104,8 @@ uv tool update-shell  # 添加到 PATH
 | `get_texture_info` | 获取纹理元数据 |
 | `get_texture_data` | 获取纹理像素数据 (Base64) |
 | `get_pipeline_state` | 获取管线状态 |
+| `export_texture` | 导出纹理为 PNG，返回下载 URL |
+| `export_mesh` | 导出 Mesh 为 OBJ，返回下载 URL |
 
 ## 使用示例
 
@@ -148,6 +152,33 @@ get_buffer_contents(resource_id="ResourceId::123")
 # 从偏移 256 处获取 512 字节
 get_buffer_contents(resource_id="ResourceId::123", offset=256, length=512)
 ```
+
+### 导出文件（不经过模型上下文）
+
+导出工具将文件保存到 RenderDoc 主机本地，通过内置 HTTP 服务器提供下载 URL。
+大文件数据不会进入 AI 模型上下文，仅返回 URL 和元信息。
+
+```
+# 导出纹理为 PNG
+export_texture(resource_id="ResourceId::123", event_id=100)
+# → {"url": "http://host:19877/tex_123_eid100_mip0.png", "size_bytes": 524288, ...}
+
+# 导出 Mesh 为 OBJ
+export_mesh(event_id=100)
+# → {"url": "http://host:19877/mesh_eid100.obj", "vertex_count": 1500, ...}
+```
+
+### 文件服务器配置
+
+导出文件通过 HTTP 文件服务器提供下载，可通过环境变量配置：
+
+| 环境变量 | 默认值 | 说明 |
+|---------|--------|------|
+| `RENDERDOC_MCP_FILE_SERVER_PORT` | `19877` | HTTP 文件服务端口 |
+| `RENDERDOC_MCP_EXPORT_DIR` | `%TEMP%\renderdoc_mcp_exports` | 导出文件存储目录 |
+| `RENDERDOC_MCP_EXPORT_RETENTION_DAYS` | `7` | 文件保留天数（0=不自动清理） |
+
+在 RenderDoc 启动前设置环境变量即可生效。
 
 ## 系统要求
 

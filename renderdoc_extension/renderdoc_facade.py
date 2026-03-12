@@ -10,6 +10,7 @@ from .services import (
     SearchService,
     ResourceService,
     PipelineService,
+    ExportService,
 )
 
 
@@ -23,14 +24,17 @@ class RenderDocFacade:
     - SearchService: Reverse lookup searches
     - ResourceService: Texture and buffer data
     - PipelineService: Pipeline state and shader info
+    - ExportService: File export (texture PNG, mesh OBJ)
     """
 
-    def __init__(self, ctx):
+    def __init__(self, ctx, export_dir=None, file_server_base_url=None):
         """
         Initialize facade with CaptureContext.
 
         Args:
             ctx: The pyrenderdoc CaptureContext from register()
+            export_dir: Directory for exported files (optional, needed for export)
+            file_server_base_url: Base URL of the HTTP file server (optional)
         """
         self.ctx = ctx
 
@@ -40,6 +44,11 @@ class RenderDocFacade:
         self._search = SearchService(ctx, self._invoke)
         self._resource = ResourceService(ctx, self._invoke)
         self._pipeline = PipelineService(ctx, self._invoke)
+        self._export = None
+        if export_dir and file_server_base_url:
+            self._export = ExportService(
+                ctx, self._invoke, export_dir, file_server_base_url
+            )
 
     def _invoke(self, callback):
         """Invoke callback on replay thread via BlockInvoke"""
@@ -135,3 +144,17 @@ class RenderDocFacade:
     def get_pipeline_state(self, event_id):
         """Get full pipeline state at an event"""
         return self._pipeline.get_pipeline_state(event_id)
+
+    # ==================== Export Operations ====================
+
+    def export_texture(self, resource_id, event_id, mip=0, slice_index=0):
+        """Export texture to PNG and return download URL"""
+        if self._export is None:
+            raise ValueError("Export service not configured")
+        return self._export.export_texture(resource_id, event_id, mip, slice_index)
+
+    def export_mesh(self, event_id):
+        """Export mesh to OBJ and return download URL"""
+        if self._export is None:
+            raise ValueError("Export service not configured")
+        return self._export.export_mesh(event_id)

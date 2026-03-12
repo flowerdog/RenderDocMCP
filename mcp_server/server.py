@@ -281,6 +281,58 @@ def get_pipeline_state(event_id: int) -> dict:
 
 
 @mcp.tool
+def export_texture(
+    resource_id: str,
+    event_id: int,
+    mip: int = 0,
+    slice: int = 0,
+) -> dict:
+    """
+    Export a texture to PNG file and return a download URL.
+
+    The texture is saved to the export directory on the RenderDoc host and
+    served via HTTP. The returned URL can be used to download the file
+    directly, without the image data passing through the AI model context.
+
+    Args:
+        resource_id: The resource ID of the texture to export
+        event_id: The event ID at which to capture the texture state
+        mip: Mip level to export (default: 0)
+        slice: Array slice or cube face index (default: 0)
+
+    Returns dict with url, filename, size_bytes, and export metadata.
+    """
+    return bridge.call(
+        "export_texture",
+        {
+            "resource_id": resource_id,
+            "event_id": event_id,
+            "mip": mip,
+            "slice": slice,
+        },
+    )
+
+
+@mcp.tool
+def export_mesh(event_id: int) -> dict:
+    """
+    Export the mesh geometry at a draw call to OBJ file and return a download URL.
+
+    Extracts vertex positions, normals, and texture coordinates from the
+    vertex input assembly at the specified event, then writes a Wavefront OBJ
+    file. The file is served via HTTP so it can be downloaded without passing
+    through the AI model context.
+
+    Args:
+        event_id: The event ID of the draw call whose mesh to export
+
+    Returns dict with url, filename, size_bytes, vertex_count, face_count,
+    and flags indicating whether normals and texcoords are present.
+    """
+    return bridge.call("export_mesh", {"event_id": event_id})
+
+
+@mcp.tool
 def list_captures(directory: str) -> dict:
     """
     List all RenderDoc capture files (.rdc) in the specified directory.

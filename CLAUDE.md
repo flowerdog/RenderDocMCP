@@ -30,8 +30,12 @@ RenderDocMCP/
 │   ├── __init__.py                    # register()/unregister()
 │   ├── extension.json                 # 清单文件
 │   ├── socket_server.py               # TCP Socket 服务端（非阻塞 + QTimer）
+│   ├── file_server.py                 # HTTP 文件服务（导出文件下载）
 │   ├── request_handler.py             # 请求处理
-│   └── renderdoc_facade.py            # RenderDoc API 封装
+│   ├── renderdoc_facade.py            # RenderDoc API 封装
+│   └── services/
+│       ├── export_service.py          # 文件导出（texture→PNG, mesh→OBJ）
+│       └── ...
 │
 └── scripts/
     └── install_extension.py           # 扩展安装脚本
@@ -56,6 +60,8 @@ RenderDocMCP/
 | `get_texture_info` | 纹理元数据 |
 | `get_texture_data` | 纹理像素数据（支持 mip/slice/3D 切片） |
 | `get_pipeline_state` | 完整管线状态 |
+| `export_texture` | 导出纹理为 PNG 文件，返回下载 URL（不经过模型） |
+| `export_mesh` | 导出 Draw Call 的 Mesh 为 OBJ 文件，返回下载 URL |
 
 ### get_draw_calls 过滤选项
 
@@ -113,6 +119,21 @@ get_action_timings(marker_filter="Camera.Render", exclude_markers=["GUI.Repaint"
 **注意**：GPU 计时计数器在部分硬件/驱动上可能不可用。
 当返回 `available: false` 时，该抓帧无法获取计时信息。
 
+### 文件导出工具
+
+导出工具将文件保存到 RenderDoc 主机本地，通过 HTTP 文件服务器提供下载。
+返回值仅包含 URL 和元信息，**大文件数据不经过 AI 模型上下文**。
+
+```python
+# 导出纹理为 PNG
+export_texture(resource_id="ResourceId::12345", event_id=100, mip=0, slice=0)
+# → {"url": "http://192.168.1.100:19877/tex_12345_eid100_mip0.png", "size_bytes": 524288, ...}
+
+# 导出 Mesh 为 OBJ
+export_mesh(event_id=100)
+# → {"url": "http://192.168.1.100:19877/mesh_eid100.obj", "vertex_count": 1500, "face_count": 3000, ...}
+```
+
 ## 通信协议
 
 TCP Socket（长度前缀帧协议）：
@@ -122,6 +143,18 @@ TCP Socket（长度前缀帧协议）：
 - RenderDoc 端：非阻塞 Socket + QTimer（10ms 轮询）
 - MCP Server 端：标准 socket 模块 + 懒连接 + 自动重连
 - 环境变量：通过 `RENDERDOC_MCP_HOST`、`RENDERDOC_MCP_PORT` 配置
+
+### HTTP 文件服务（导出下载）
+
+- RenderDoc 端默认监听：`0.0.0.0:19877`（daemon 线程）
+- 仅提供导出目录内的静态文件下载
+- 环境变量配置：
+
+| 环境变量 | 默认值 | 说明 |
+|---------|--------|------|
+| `RENDERDOC_MCP_FILE_SERVER_PORT` | `19877` | HTTP 文件服务端口 |
+| `RENDERDOC_MCP_EXPORT_DIR` | `%TEMP%\renderdoc_mcp_exports` | 导出文件存储目录 |
+| `RENDERDOC_MCP_EXPORT_RETENTION_DAYS` | `7` | 文件保留天数（0=不自动清理） |
 
 ## 开发笔记
 
