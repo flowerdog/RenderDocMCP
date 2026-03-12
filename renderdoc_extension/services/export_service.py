@@ -136,7 +136,7 @@ class ExportService(object):
             try:
                 controller.SetFrameEvent(event_id, True)
 
-                draw = controller.GetActionByEID(event_id)
+                draw = self.ctx.GetAction(event_id)
                 if draw is None:
                     result["error"] = "No action found at event_id %d" % event_id
                     return
