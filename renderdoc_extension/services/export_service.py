@@ -150,27 +150,23 @@ class ExportService(object):
                     result["error"] = "No vertex inputs at event_id %d" % event_id
                     return
 
-                # Identify position, normal, texcoord attributes
-                pos_attr = None
-                normal_attr = None
-                texcoord_attr = None
+                print("[ExportMesh] eid=%d, %d vertex attrs: %s"
+                      % (event_id, len(attrs),
+                         [(a.name, "inst" if a.perInstance else "vert",
+                           str(a.format.compType), a.format.compCount,
+                           a.format.compByteWidth)
+                          for a in attrs]))
 
-                for attr in attrs:
-                    if attr.perInstance:
-                        continue
-                    name_upper = attr.name.upper()
-                    if name_upper.startswith("POSITION") or name_upper.startswith("SV_POSITION"):
-                        if pos_attr is None:
-                            pos_attr = attr
-                    elif name_upper.startswith("NORMAL"):
-                        if normal_attr is None:
-                            normal_attr = attr
-                    elif name_upper.startswith("TEXCOORD"):
-                        if texcoord_attr is None:
-                            texcoord_attr = attr
+                pos_attr, normal_attr, texcoord_attr = \
+                    self._identify_vertex_attrs(attrs)
 
                 if pos_attr is None:
-                    result["error"] = "No POSITION attribute found at event_id %d" % event_id
+                    attr_names = [a.name for a in attrs if not a.perInstance]
+                    result["error"] = (
+                        "No POSITION attribute found at event_id %d. "
+                        "Available vertex attributes: %s"
+                        % (event_id, attr_names)
+                    )
                     return
 
                 # Get indices
@@ -290,6 +286,64 @@ class ExportService(object):
         return result["data"]
 
     # ======================== Helpers ========================
+
+    @staticmethod
+    def _identify_vertex_attrs(attrs):
+        """Identify position, normal, texcoord from vertex input attributes.
+
+        Strategy:
+        1. Match by semantic name (POSITION, NORMAL, TEXCOORD and common variants)
+        2. Fallback: assign by slot order among per-vertex float3/float4 attrs
+        """
+        pos_attr = None
+        normal_attr = None
+        texcoord_attr = None
+
+        _POS_NAMES = ("POSITION", "SV_POSITION", "POS", "IN_POSITION", "INPOSITION")
+        _NORM_NAMES = ("NORMAL", "NORM", "IN_NORMAL", "INNORMAL")
+        _UV_NAMES = ("TEXCOORD", "UV", "TEX", "IN_TEXCOORD", "INTEXCOORD")
+
+        per_vertex = [a for a in attrs if not a.perInstance]
+
+        for attr in per_vertex:
+            name = attr.name.upper().lstrip("_")
+            for prefix in _POS_NAMES:
+                if name.startswith(prefix):
+                    if pos_attr is None:
+                        pos_attr = attr
+                    break
+            else:
+                for prefix in _NORM_NAMES:
+                    if name.startswith(prefix):
+                        if normal_attr is None:
+                            normal_attr = attr
+                        break
+                else:
+                    for prefix in _UV_NAMES:
+                        if name.startswith(prefix):
+                            if texcoord_attr is None:
+                                texcoord_attr = attr
+                            break
+
+        if pos_attr is not None:
+            return pos_attr, normal_attr, texcoord_attr
+
+        # Fallback: assign by slot order for float attrs with 2-4 components
+        float_attrs = [
+            a for a in per_vertex
+            if a.format.compType == rd.CompType.Float and a.format.compCount >= 2
+        ]
+        if float_attrs:
+            pos_attr = float_attrs[0]
+            if len(float_attrs) > 1 and float_attrs[1].format.compCount >= 3:
+                normal_attr = float_attrs[1]
+            if len(float_attrs) > 2 and float_attrs[2].format.compCount >= 2:
+                texcoord_attr = float_attrs[2]
+            elif len(float_attrs) > 1 and float_attrs[1].format.compCount == 2:
+                texcoord_attr = float_attrs[1]
+                normal_attr = None
+
+        return pos_attr, normal_attr, texcoord_attr
 
     @staticmethod
     def _get_indices(controller, draw, ib):
