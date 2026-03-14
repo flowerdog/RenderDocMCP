@@ -145,6 +145,23 @@ class RenderDocFacade:
         """Get full pipeline state at an event"""
         return self._pipeline.get_pipeline_state(event_id)
 
+    def get_cbuffer_values(
+        self,
+        event_id,
+        stage,
+        cbuffer_name=None,
+        cbuffer_index=None,
+        include_raw_bytes=False,
+    ):
+        """Get actual values for one constant buffer"""
+        return self._pipeline.get_cbuffer_values(
+            event_id,
+            stage,
+            cbuffer_name=cbuffer_name,
+            cbuffer_index=cbuffer_index,
+            include_raw_bytes=include_raw_bytes,
+        )
+
     # ==================== Export Operations ====================
 
     def export_texture(self, resource_id, event_id, mip=0, slice_index=0):

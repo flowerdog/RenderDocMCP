@@ -281,6 +281,41 @@ def get_pipeline_state(event_id: int) -> dict:
 
 
 @mcp.tool
+def get_cbuffer_values(
+    event_id: int,
+    stage: Literal["vertex", "pixel", "compute"],
+    cbuffer_name: str | None = None,
+    cbuffer_index: int | None = None,
+    include_raw_bytes: bool = False,
+) -> dict:
+    """
+    Get the actual values of one constant buffer bound at a specific event and stage.
+
+    Args:
+        event_id: The event ID to inspect
+        stage: Shader stage (vertex, pixel, compute)
+        cbuffer_name: Constant buffer name to resolve (takes priority over index)
+        cbuffer_index: Constant buffer index in ShaderReflection.constantBlocks
+        include_raw_bytes: Also return base64 raw bytes for the bound range
+
+    Returns constant buffer metadata and variable values. If include_raw_bytes=True,
+    raw_bytes_base64 is included when a backing buffer is available.
+    """
+    if cbuffer_name is None and cbuffer_index is None:
+        raise ValueError("Either cbuffer_name or cbuffer_index is required")
+
+    params: dict[str, object] = {"event_id": event_id, "stage": stage}
+    if cbuffer_name is not None:
+        params["cbuffer_name"] = cbuffer_name
+    if cbuffer_index is not None:
+        params["cbuffer_index"] = cbuffer_index
+    if include_raw_bytes:
+        params["include_raw_bytes"] = True
+
+    return bridge.call("get_cbuffer_values", params)
+
+
+@mcp.tool
 def export_texture(
     resource_id: str,
     event_id: int,

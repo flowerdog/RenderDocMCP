@@ -2,6 +2,8 @@
 Pipeline state service for RenderDoc.
 """
 
+import base64
+
 import renderdoc as rd
 
 from ..utils import Parsers, Serializers, Helpers
@@ -173,6 +175,115 @@ class PipelineService:
         if result["error"]:
             raise ValueError(result["error"])
         return result["pipeline"]
+
+    def get_cbuffer_values(
+        self,
+        event_id,
+        stage,
+        cbuffer_name=None,
+        cbuffer_index=None,
+        include_raw_bytes=False,
+    ):
+        """Get actual values for one constant buffer at a specific event/stage."""
+        if not self.ctx.IsCaptureLoaded():
+            raise ValueError("No capture loaded")
+
+        result = {"data": None, "error": None}
+
+        def callback(controller):
+            controller.SetFrameEvent(event_id, True)
+
+            pipe = controller.GetPipelineState()
+            stage_enum = Parsers.parse_stage(stage)
+
+            shader = pipe.GetShader(stage_enum)
+            if shader == rd.ResourceId.Null():
+                result["error"] = "No %s shader bound" % stage
+                return
+
+            reflection = pipe.GetShaderReflection(stage_enum)
+            if not reflection:
+                result["error"] = "Shader reflection unavailable for %s stage" % stage
+                return
+
+            if not reflection.constantBlocks:
+                result["error"] = "No constant buffers found for %s stage" % stage
+                return
+
+            cb_idx = self._resolve_cbuffer_index(
+                reflection, cbuffer_name=cbuffer_name, cbuffer_index=cbuffer_index
+            )
+            cb = reflection.constantBlocks[cb_idx]
+
+            slot = cb.bindPoint if hasattr(cb, "bindPoint") else cb.fixedBindNumber
+
+            bind = pipe.GetConstantBlock(stage_enum, cb_idx, 0)
+            buffer_resource = bind.descriptor.resource
+            buffer_offset = bind.descriptor.byteOffset
+            buffer_size = bind.descriptor.byteSize
+
+            if buffer_size is None or buffer_size <= 0:
+                buffer_size = cb.byteSize
+            if buffer_offset is None or buffer_offset < 0:
+                buffer_offset = 0
+
+            pipe_obj = self._get_pipeline_object(pipe, stage_enum)
+            variables = controller.GetCBufferVariableContents(
+                pipe_obj,
+                reflection.resourceId,
+                stage_enum,
+                reflection.entryPoint,
+                cb_idx,
+                buffer_resource,
+                int(buffer_offset),
+                int(buffer_size),
+            )
+
+            data = {
+                "event_id": event_id,
+                "stage": stage,
+                "cbuffer_name": cb.name,
+                "cbuffer_index": cb_idx,
+                "slot": slot,
+                "byte_size": cb.byteSize,
+                "buffer_backed": bool(getattr(cb, "bufferBacked", True)),
+                "buffer_resource_id": (
+                    str(buffer_resource)
+                    if buffer_resource != rd.ResourceId.Null()
+                    else None
+                ),
+                "byte_offset": int(buffer_offset),
+                "bound_byte_size": int(buffer_size),
+                "variables": Serializers.serialize_variables(variables),
+            }
+
+            if include_raw_bytes:
+                if (
+                    data["buffer_backed"]
+                    and buffer_resource != rd.ResourceId.Null()
+                    and int(buffer_size) > 0
+                ):
+                    raw_data = controller.GetBufferData(
+                        buffer_resource, int(buffer_offset), int(buffer_size)
+                    )
+                    data["raw_bytes_base64"] = base64.b64encode(raw_data).decode("ascii")
+                    data["raw_bytes_length"] = len(raw_data)
+                else:
+                    data["raw_bytes_base64"] = None
+                    data["raw_bytes_length"] = 0
+
+            result["data"] = data
+
+        try:
+            self._invoke(callback)
+        except ValueError:
+            raise
+        except Exception as e:
+            result["error"] = str(e)
+
+        if result["error"]:
+            raise ValueError(result["error"])
+        return result["data"]
 
     def _get_stage_resources(self, controller, pipe, stage, reflection):
         """Get shader resource views (SRVs) for a stage"""
@@ -414,6 +525,31 @@ class PipelineService:
             cbuffers.append(cb_info)
 
         return cbuffers
+
+    def _resolve_cbuffer_index(self, reflection, cbuffer_name=None, cbuffer_index=None):
+        """Resolve constant buffer index from name/index inputs."""
+        if cbuffer_name is not None:
+            for i, cb in enumerate(reflection.constantBlocks):
+                if cb.name == cbuffer_name:
+                    return i
+
+            target_name = cbuffer_name.lower()
+            for i, cb in enumerate(reflection.constantBlocks):
+                if cb.name and cb.name.lower() == target_name:
+                    return i
+
+            raise ValueError("Constant buffer not found by name: %s" % cbuffer_name)
+
+        if cbuffer_index is None:
+            raise ValueError("Either cbuffer_name or cbuffer_index is required")
+
+        idx = int(cbuffer_index)
+        if idx < 0 or idx >= len(reflection.constantBlocks):
+            raise ValueError(
+                "cbuffer_index out of range: %d (available: 0-%d)"
+                % (idx, len(reflection.constantBlocks) - 1)
+            )
+        return idx
 
     def _get_resource_bindings(self, reflection):
         """Get shader resource bindings"""

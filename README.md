@@ -100,6 +100,7 @@ uv tool update-shell  # 添加到 PATH
 | `get_draw_calls` | 获取 Draw Call 层级列表 |
 | `get_draw_call_details` | 获取特定 Draw Call 的详细信息 |
 | `get_shader_info` | 获取 Shader 源码和常量缓冲区值 |
+| `get_cbuffer_values` | 获取指定阶段/指定 CBuffer 的实际变量值（可选原始字节） |
 | `get_buffer_contents` | 获取缓冲区内容 (Base64) |
 | `get_texture_info` | 获取纹理元数据 |
 | `get_texture_data` | 获取纹理像素数据 (Base64) |
@@ -121,6 +122,30 @@ get_draw_calls(include_children=true)
 ```
 get_shader_info(event_id=123, stage="pixel")
 ```
+
+### 获取指定 CBuffer 实际值
+
+```
+# 按名称读取（优先于 index）
+get_cbuffer_values(event_id=2051, stage="vertex", cbuffer_name="uniforms15")
+
+# 按索引读取
+get_cbuffer_values(event_id=2051, stage="pixel", cbuffer_index=1)
+
+# 同时返回绑定范围的原始字节（Base64），便于按 offset 自行解析
+get_cbuffer_values(
+  event_id=2051,
+  stage="pixel",
+  cbuffer_name="uniforms137",
+  include_raw_bytes=true
+)
+```
+
+参数说明：
+- `stage` 支持 `vertex` / `pixel` / `compute`
+- `cbuffer_name` 与 `cbuffer_index` 至少提供一个；同时提供时优先使用 `cbuffer_name`
+- `include_raw_bytes=true` 时，若该块有 buffer backing，会返回 `raw_bytes_base64`
+- 常见错误：`event_id` 无效、该阶段无 shader、找不到指定 cbuffer、`cbuffer_index` 越界
 
 ### 获取管线状态
 

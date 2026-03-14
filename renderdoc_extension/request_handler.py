@@ -26,6 +26,7 @@ class RequestHandler:
             "get_texture_info": self._handle_get_texture_info,
             "get_texture_data": self._handle_get_texture_data,
             "get_pipeline_state": self._handle_get_pipeline_state,
+            "get_cbuffer_values": self._handle_get_cbuffer_values,
             "list_captures": self._handle_list_captures,
             "open_capture": self._handle_open_capture,
             "export_texture": self._handle_export_texture,
@@ -172,6 +173,29 @@ class RequestHandler:
         if event_id is None:
             raise ValueError("event_id is required")
         return self.facade.get_pipeline_state(int(event_id))
+
+    def _handle_get_cbuffer_values(self, params):
+        """Handle get_cbuffer_values request"""
+        event_id = params.get("event_id")
+        if event_id is None:
+            raise ValueError("event_id is required")
+        stage = params.get("stage")
+        if stage is None:
+            raise ValueError("stage is required")
+        cbuffer_name = params.get("cbuffer_name")
+        cbuffer_index = params.get("cbuffer_index")
+        if cbuffer_name is None and cbuffer_index is None:
+            raise ValueError("Either cbuffer_name or cbuffer_index is required")
+        include_raw_bytes = params.get("include_raw_bytes", False)
+        if cbuffer_index is not None:
+            cbuffer_index = int(cbuffer_index)
+        return self.facade.get_cbuffer_values(
+            int(event_id),
+            stage,
+            cbuffer_name=cbuffer_name,
+            cbuffer_index=cbuffer_index,
+            include_raw_bytes=bool(include_raw_bytes),
+        )
 
     def _handle_list_captures(self, params):
         """Handle list_captures request"""
