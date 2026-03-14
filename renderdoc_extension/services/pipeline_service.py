@@ -387,8 +387,16 @@ class PipelineService:
             try:
                 bind = pipe.GetConstantBlock(stage, i, 0)
                 buffer_resource = bind.descriptor.resource
+                buffer_offset = bind.descriptor.byteOffset
+                buffer_size = bind.descriptor.byteSize
                 if buffer_resource != rd.ResourceId.Null():
                     pipe_obj = self._get_pipeline_object(pipe, stage)
+                    # RenderDoc expects the bound byte range for sub-allocated buffers.
+                    # Passing 0,0 can read the wrong region when CBV/Ubo binds a slice.
+                    if buffer_size is None or buffer_size <= 0:
+                        buffer_size = cb.byteSize
+                    if buffer_offset is None or buffer_offset < 0:
+                        buffer_offset = 0
                     variables = controller.GetCBufferVariableContents(
                         pipe_obj,
                         reflection.resourceId,
@@ -396,8 +404,8 @@ class PipelineService:
                         reflection.entryPoint,
                         i,
                         buffer_resource,
-                        0,
-                        0,
+                        int(buffer_offset),
+                        int(buffer_size),
                     )
                     cb_info["variables"] = Serializers.serialize_variables(variables)
             except Exception as e:
