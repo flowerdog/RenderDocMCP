@@ -1,6 +1,6 @@
 """
 Export service for RenderDoc MCP Bridge.
-Exports textures to PNG and meshes to OBJ, serving them via HTTP.
+Exports textures/shaders/meshes to files, serving them via HTTP.
 
 Compatible with Python 3.6 (no f-strings).
 """
@@ -15,7 +15,7 @@ from ..utils import Parsers
 
 
 class ExportService(object):
-    """Handles texture and mesh export to files."""
+    """Handles texture, shader and mesh export to files."""
 
     def __init__(self, ctx, invoke_fn, export_dir, file_server_base_url):
         self.ctx = ctx
@@ -110,6 +110,92 @@ class ExportService(object):
             except Exception as e:
                 import traceback
                 result["error"] = "Export failed: %s\n%s" % (str(e), traceback.format_exc())
+
+        self._invoke(callback)
+
+        if result["error"]:
+            raise ValueError(result["error"])
+        return result["data"]
+
+    # ======================== Shader Export ========================
+
+    def export_shader(self, event_id, stage):
+        """Export bound shader disassembly to text file and return download URL."""
+        if not self.ctx.IsCaptureLoaded():
+            raise ValueError("No capture loaded")
+
+        self._ensure_export_dir()
+
+        tag = self._get_capture_tag()
+        stage_name = str(stage).lower()
+        filename = "%s_shader_%s_eid%d.txt" % (tag, stage_name, event_id)
+        output_path = os.path.join(self.export_dir, filename)
+
+        result = {"data": None, "error": None}
+
+        def callback(controller):
+            try:
+                controller.SetFrameEvent(event_id, True)
+
+                pipe = controller.GetPipelineState()
+                stage_enum = Parsers.parse_stage(stage)
+                shader = pipe.GetShader(stage_enum)
+
+                if shader == rd.ResourceId.Null():
+                    result["error"] = "No %s shader bound at event_id %d" % (stage, event_id)
+                    return
+
+                reflection = pipe.GetShaderReflection(stage_enum)
+                if reflection is None:
+                    result["error"] = "Shader reflection unavailable for %s at event_id %d" % (
+                        stage,
+                        event_id,
+                    )
+                    return
+
+                targets = controller.GetDisassemblyTargets(True)
+                if not targets:
+                    result["error"] = "No disassembly target available"
+                    return
+
+                pipe_obj = pipe.GetGraphicsPipelineObject()
+                if stage_enum == rd.ShaderStage.Compute:
+                    try:
+                        pipe_obj = pipe.GetComputePipelineObject()
+                    except Exception:
+                        pass
+
+                disasm = controller.DisassembleShader(pipe_obj, reflection, targets[0])
+                if not disasm:
+                    result["error"] = "Shader disassembly is empty"
+                    return
+
+                with open(output_path, "w") as f:
+                    f.write("// Exported from RenderDoc MCP\n")
+                    f.write("// event_id: %d\n" % event_id)
+                    f.write("// stage: %s\n" % stage_name)
+                    f.write("// resource_id: %s\n\n" % str(shader))
+                    f.write(disasm)
+
+                if not os.path.isfile(output_path):
+                    result["error"] = "Shader export did not produce output file"
+                    return
+
+                file_size = os.path.getsize(output_path)
+                result["data"] = {
+                    "url": self._build_url(filename),
+                    "filename": filename,
+                    "path": output_path,
+                    "size_bytes": file_size,
+                    "event_id": event_id,
+                    "stage": stage_name,
+                    "resource_id": str(shader),
+                    "disassembly_target": str(targets[0]),
+                    "format": "txt",
+                }
+            except Exception as e:
+                import traceback
+                result["error"] = "Shader export failed: %s\n%s" % (str(e), traceback.format_exc())
 
         self._invoke(callback)
 

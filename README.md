@@ -105,6 +105,7 @@ uv tool update-shell  # 添加到 PATH
 | `get_texture_data` | 获取纹理像素数据 (Base64) |
 | `get_pipeline_state` | 获取管线状态 |
 | `export_texture` | 导出纹理为 PNG，返回下载 URL |
+| `export_shader` | 导出 Shader 反汇编为 TXT，返回下载 URL |
 | `export_mesh` | 导出 Mesh 为 OBJ，返回下载 URL |
 
 ## 使用示例
@@ -162,6 +163,10 @@ get_buffer_contents(resource_id="ResourceId::123", offset=256, length=512)
 # 导出纹理为 PNG
 export_texture(resource_id="ResourceId::123", event_id=100)
 # → {"url": "http://host:19877/tex_123_eid100_mip0.png", "size_bytes": 524288, ...}
+
+# 导出 Pixel Shader 反汇编为 TXT
+export_shader(event_id=100, stage="pixel")
+# → {"url": "http://host:19877/shader_pixel_eid100.txt", "size_bytes": 16384, ...}
 
 # 导出 Mesh 为 OBJ
 export_mesh(event_id=100)

@@ -29,6 +29,7 @@ class RequestHandler:
             "list_captures": self._handle_list_captures,
             "open_capture": self._handle_open_capture,
             "export_texture": self._handle_export_texture,
+            "export_shader": self._handle_export_shader,
             "export_mesh": self._handle_export_mesh,
         }
 
@@ -204,3 +205,13 @@ class RequestHandler:
         if event_id is None:
             raise ValueError("event_id is required")
         return self.facade.export_mesh(int(event_id))
+
+    def _handle_export_shader(self, params):
+        """Handle export_shader request"""
+        event_id = params.get("event_id")
+        if event_id is None:
+            raise ValueError("event_id is required")
+        stage = params.get("stage")
+        if stage is None:
+            raise ValueError("stage is required")
+        return self.facade.export_shader(int(event_id), stage)

@@ -14,6 +14,13 @@ class PipelineService:
         self.ctx = ctx
         self._invoke = invoke_fn
 
+    @staticmethod
+    def _get_pipeline_object(pipe, stage):
+        """Get pipeline object ID for a shader stage."""
+        if stage == rd.ShaderStage.Compute:
+            return pipe.GetComputePipelineObject()
+        return pipe.GetGraphicsPipelineObject()
+
     def get_shader_info(self, event_id, stage):
         """Get shader information for a specific stage"""
         if not self.ctx.IsCaptureLoaded():
@@ -45,8 +52,9 @@ class PipelineService:
             try:
                 targets = controller.GetDisassemblyTargets(True)
                 if targets:
+                    pipe_obj = self._get_pipeline_object(pipe, stage_enum)
                     disasm = controller.DisassembleShader(
-                        pipe.GetGraphicsPipelineObject(), reflection, targets[0]
+                        pipe_obj, reflection, targets[0]
                     )
                     shader_info["disassembly"] = disasm
             except Exception as e:
@@ -377,17 +385,19 @@ class PipelineService:
             }
 
             try:
-                bind = pipe.GetConstantBuffer(stage, i, 0)
-                if bind.resourceId != rd.ResourceId.Null():
+                bind = pipe.GetConstantBlock(stage, i, 0)
+                buffer_resource = bind.descriptor.resource
+                if buffer_resource != rd.ResourceId.Null():
+                    pipe_obj = self._get_pipeline_object(pipe, stage)
                     variables = controller.GetCBufferVariableContents(
-                        pipe.GetGraphicsPipelineObject(),
+                        pipe_obj,
                         reflection.resourceId,
                         stage,
                         reflection.entryPoint,
                         i,
-                        bind.resourceId,
-                        bind.byteOffset,
-                        bind.byteSize,
+                        buffer_resource,
+                        0,
+                        0,
                     )
                     cb_info["variables"] = Serializers.serialize_variables(variables)
             except Exception as e:

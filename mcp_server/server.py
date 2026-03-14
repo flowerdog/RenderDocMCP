@@ -314,6 +314,27 @@ def export_texture(
 
 
 @mcp.tool
+def export_shader(
+    event_id: int,
+    stage: Literal["vertex", "hull", "domain", "geometry", "pixel", "compute"],
+) -> dict:
+    """
+    Export the bound shader disassembly at a draw/dispatch event and return a download URL.
+
+    The shader disassembly is written to a text file in the export directory on
+    the RenderDoc host and served via HTTP, so large text output does not need
+    to pass through the AI model context.
+
+    Args:
+        event_id: The event ID at which to inspect the pipeline
+        stage: Shader stage to export (vertex, hull, domain, geometry, pixel, compute)
+
+    Returns dict with url, filename, size_bytes, shader metadata, and export format.
+    """
+    return bridge.call("export_shader", {"event_id": event_id, "stage": stage})
+
+
+@mcp.tool
 def export_mesh(event_id: int) -> dict:
     """
     Export the mesh geometry at a draw call to OBJ file and return a download URL.

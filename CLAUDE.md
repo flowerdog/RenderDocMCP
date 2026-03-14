@@ -61,6 +61,7 @@ RenderDocMCP/
 | `get_texture_data` | 纹理像素数据（⚠️ 仅限像素级识别/分析场景，见下方说明） |
 | `get_pipeline_state` | 完整管线状态 |
 | `export_texture` | 导出纹理为 PNG 文件，返回下载 URL（不经过模型） |
+| `export_shader` | 导出 Shader 反汇编为 TXT 文件，返回下载 URL（不经过模型） |
 | `export_mesh` | 导出 Draw Call 的 Mesh 为 OBJ 文件，返回下载 URL |
 
 ### ⚠️ get_texture_data 使用限制
@@ -138,6 +139,10 @@ get_action_timings(marker_filter="Camera.Render", exclude_markers=["GUI.Repaint"
 # 导出纹理为 PNG
 export_texture(resource_id="ResourceId::12345", event_id=100, mip=0, slice=0)
 # → {"url": "http://192.168.1.100:19877/tex_12345_eid100_mip0.png", "size_bytes": 524288, ...}
+
+# 导出 Shader 反汇编为 TXT
+export_shader(event_id=100, stage="pixel")
+# → {"url": "http://192.168.1.100:19877/shader_pixel_eid100.txt", "size_bytes": 16384, ...}
 
 # 导出 Mesh 为 OBJ
 export_mesh(event_id=100)

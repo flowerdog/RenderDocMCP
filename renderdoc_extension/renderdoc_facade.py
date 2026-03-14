@@ -24,7 +24,7 @@ class RenderDocFacade:
     - SearchService: Reverse lookup searches
     - ResourceService: Texture and buffer data
     - PipelineService: Pipeline state and shader info
-    - ExportService: File export (texture PNG, mesh OBJ)
+    - ExportService: File export (texture PNG, shader TXT, mesh OBJ)
     """
 
     def __init__(self, ctx, export_dir=None, file_server_base_url=None):
@@ -152,6 +152,12 @@ class RenderDocFacade:
         if self._export is None:
             raise ValueError("Export service not configured")
         return self._export.export_texture(resource_id, event_id, mip, slice_index)
+
+    def export_shader(self, event_id, stage):
+        """Export shader disassembly to TXT and return download URL"""
+        if self._export is None:
+            raise ValueError("Export service not configured")
+        return self._export.export_shader(event_id, stage)
 
     def export_mesh(self, event_id):
         """Export mesh to OBJ and return download URL"""
