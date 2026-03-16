@@ -12,6 +12,7 @@ import time
 import renderdoc as rd
 
 from ..utils import Parsers
+from .. import spirv_cross
 
 
 class ExportService(object):
@@ -132,6 +133,7 @@ class ExportService(object):
         output_path = os.path.join(self.export_dir, filename)
 
         result = {"data": None, "error": None}
+        _spirv = {}
 
         def callback(controller):
             try:
@@ -163,7 +165,23 @@ class ExportService(object):
                     targets, disassembly_target
                 )
 
+                # Capture raw SPIR-V for potential spirv-cross fallback
+                try:
+                    if (hasattr(reflection, "encoding")
+                            and reflection.encoding == rd.ShaderEncoding.SPIRV):
+                        raw = reflection.rawBytes
+                        if raw and spirv_cross.is_spirv(raw):
+                            _spirv["raw"] = bytes(raw)
+                            _spirv["entry"] = reflection.entryPoint
+                            _spirv["shader_id"] = str(shader)
+                            _spirv["available"] = available
+                except Exception:
+                    pass
+
                 if chosen is None and disassembly_target:
+                    if _spirv.get("raw") and spirv_cross.parse_lang(disassembly_target):
+                        _spirv["fallback_needed"] = True
+                        return
                     result["error"] = (
                         "Requested target '%s' not available. Available: %s"
                         % (disassembly_target, ", ".join(available))
@@ -172,6 +190,16 @@ class ExportService(object):
 
                 if chosen is None:
                     chosen = available[0]
+
+                # Check if default choice can be upgraded via spirv-cross
+                if not disassembly_target and _spirv.get("raw"):
+                    is_preferred = False
+                    for pref in PipelineService.PREFERRED_TARGETS:
+                        if pref.lower() in chosen.lower():
+                            is_preferred = True
+                            break
+                    if not is_preferred:
+                        _spirv["upgrade_from"] = chosen
 
                 pipe_obj = pipe.GetGraphicsPipelineObject()
                 if stage_enum == rd.ShaderStage.Compute:
@@ -185,13 +213,9 @@ class ExportService(object):
                     result["error"] = "Shader disassembly is empty"
                     return
 
-                with open(output_path, "w") as f:
-                    f.write("// Exported from RenderDoc MCP\n")
-                    f.write("// event_id: %d\n" % event_id)
-                    f.write("// stage: %s\n" % stage_name)
-                    f.write("// disassembly_target: %s\n" % chosen)
-                    f.write("// resource_id: %s\n\n" % str(shader))
-                    f.write(disasm)
+                self._write_shader_file(
+                    output_path, disasm, event_id, stage_name, chosen, str(shader)
+                )
 
                 if not os.path.isfile(output_path):
                     result["error"] = "Shader export did not produce output file"
@@ -216,9 +240,95 @@ class ExportService(object):
 
         self._invoke(callback)
 
+        # spirv-cross fallback: explicit target requested but not in API list
+        if _spirv.get("fallback_needed") and not result["data"] and not result["error"]:
+            self._export_via_spirv_cross(
+                _spirv, disassembly_target, output_path, filename,
+                event_id, stage_name, result,
+            )
+
+        # spirv-cross upgrade: default mode chose a non-preferred target
+        if _spirv.get("upgrade_from") and result["data"]:
+            self._upgrade_via_spirv_cross(
+                _spirv, output_path, filename, result,
+            )
+
         if result["error"]:
             raise ValueError(result["error"])
         return result["data"]
+
+    def _write_shader_file(self, path, disasm, event_id, stage_name,
+                           target, shader_id):
+        with open(path, "w") as f:
+            f.write("// Exported from RenderDoc MCP\n")
+            f.write("// event_id: %d\n" % event_id)
+            f.write("// stage: %s\n" % stage_name)
+            f.write("// disassembly_target: %s\n" % target)
+            f.write("// resource_id: %s\n\n" % shader_id)
+            f.write(disasm)
+
+    def _export_via_spirv_cross(self, spirv_data, disassembly_target,
+                                output_path, filename, event_id,
+                                stage_name, result):
+        """Decompile SPIR-V via spirv-cross and write the export file."""
+        lang = spirv_cross.parse_lang(disassembly_target) or "glsl"
+        code, error = spirv_cross.decompile(
+            spirv_data["raw"], lang, spirv_data.get("entry")
+        )
+        if not code:
+            available = spirv_data.get("available", [])
+            result["error"] = (
+                "Requested target '%s' not available via API (Available: %s) "
+                "and spirv-cross fallback failed: %s"
+                % (disassembly_target, ", ".join(available), error)
+            )
+            return
+
+        target_label = "%s (spirv-cross)" % lang.upper()
+        self._write_shader_file(
+            output_path, code, event_id, stage_name,
+            target_label, spirv_data.get("shader_id", ""),
+        )
+        available = list(spirv_data.get("available", []))
+        for tag in ("GLSL (spirv-cross)", "HLSL (spirv-cross)"):
+            if tag not in available:
+                available.append(tag)
+
+        file_size = os.path.getsize(output_path)
+        result["data"] = {
+            "url": self._build_url(filename),
+            "filename": filename,
+            "path": output_path,
+            "size_bytes": file_size,
+            "event_id": event_id,
+            "stage": stage_name,
+            "resource_id": spirv_data.get("shader_id", ""),
+            "disassembly_target": target_label,
+            "available_disassembly_targets": available,
+            "format": "txt",
+        }
+
+    def _upgrade_via_spirv_cross(self, spirv_data, output_path, filename,
+                                 result):
+        """Attempt to replace a non-preferred disassembly with GLSL."""
+        code, _error = spirv_cross.decompile(
+            spirv_data["raw"], "glsl", spirv_data.get("entry")
+        )
+        if not code:
+            return
+
+        data = result["data"]
+        target_label = "GLSL (spirv-cross)"
+        self._write_shader_file(
+            output_path, code, data["event_id"], data["stage"],
+            target_label, data.get("resource_id", ""),
+        )
+        data["disassembly_target"] = target_label
+        data["size_bytes"] = os.path.getsize(output_path)
+        available = data.get("available_disassembly_targets", [])
+        for tag in ("GLSL (spirv-cross)", "HLSL (spirv-cross)"):
+            if tag not in available:
+                available.append(tag)
 
     # ======================== Mesh Export ========================
 

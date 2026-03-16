@@ -33,6 +33,7 @@ RenderDocMCP/
 │   ├── file_server.py                 # HTTP 文件服务（导出文件下载）
 │   ├── request_handler.py             # 请求处理
 │   ├── renderdoc_facade.py            # RenderDoc API 封装
+│   ├── spirv_cross.py                 # spirv-cross CLI 集成（GLSL/HLSL fallback）
 │   └── services/
 │       ├── export_service.py          # 文件导出（texture→PNG, mesh→OBJ）
 │       └── ...
@@ -93,14 +94,24 @@ get_draw_calls(
 `get_shader_info` 和 `export_shader` 均支持 `disassembly_target` 参数，用于指定反汇编输出格式。
 不指定时默认按优先级选择：**GLSL → HLSL → 第一个可用格式**。
 
+当 RenderDoc API 内置的 disassembly targets 不包含 GLSL/HLSL 时（常见于 Vulkan 抓帧），
+会自动尝试通过 **spirv-cross** 将 SPIR-V 反编译为 GLSL/HLSL。此 fallback 对调用者透明，
+返回的 `disassembly_target` 会标记为 `"GLSL (spirv-cross)"` 或 `"HLSL (spirv-cross)"`。
+
+spirv-cross 查找顺序：
+1. `RENDERDOC_SPIRV_CROSS` 环境变量
+2. RenderDoc 安装目录下 `plugins/spirv/spirv-cross.exe`
+3. 常见 Windows 安装路径（`Program Files/RenderDoc/plugins/spirv/`）
+
 ```python
 # 默认返回 GLSL（Vulkan 抓帧）/ HLSL（D3D 抓帧）
+# 如果 API 不提供 GLSL，会自动尝试 spirv-cross
 get_shader_info(event_id=100, stage="pixel")
 
 # 指定 SPIR-V 原始 IL
 get_shader_info(event_id=100, stage="pixel", disassembly_target="SPIR-V")
 
-# 指定 HLSL
+# 指定 HLSL（API 无 HLSL 时会尝试 spirv-cross --hlsl）
 get_shader_info(event_id=100, stage="pixel", disassembly_target="HLSL")
 ```
 
@@ -109,12 +120,13 @@ get_shader_info(event_id=100, stage="pixel", disassembly_target="HLSL")
 | 图形 API | 常见可用格式 |
 |----------|-------------|
 | Vulkan | `SPIR-V (IL)`, `GLSL (SPIRV-Cross)`, `Reflection (SPIRV-Cross)` |
+| Vulkan (spirv-cross fallback) | `SPIR-V (RenderDoc)`, `GLSL (spirv-cross)`, `HLSL (spirv-cross)` |
 | D3D11 | `DXBC`, `HLSL` |
 | D3D12 | `DXBC` / `DXIL`, `HLSL` |
 | OpenGL | `GLSL` |
 
-返回结果中 `available_disassembly_targets` 列出当前 shader 的全部可用格式，
-`disassembly_target` 标明实际使用的格式。
+返回结果中 `available_disassembly_targets` 列出当前 shader 的全部可用格式
+（含 spirv-cross 提供的格式），`disassembly_target` 标明实际使用的格式。
 
 ### 抓帧管理工具
 
@@ -204,6 +216,7 @@ TCP Socket（长度前缀帧协议）：
 | `RENDERDOC_MCP_EXPORT_RETENTION_DAYS` | `7` | 文件保留天数（0=不自动清理） |
 | `RENDERDOC_MCP_EXTERNAL_HOST` | 自动检测 LAN IP | 导出 URL 中使用的主机地址（覆盖自动检测） |
 | `RENDERDOC_MCP_PYTHON` | 自动查找 | 系统 Python 路径（用于启动文件服务进程） |
+| `RENDERDOC_SPIRV_CROSS` | 自动查找 | spirv-cross 可执行文件路径（覆盖自动检测） |
 
 URL 主机地址解析优先级：`RENDERDOC_MCP_EXTERNAL_HOST` > 绑定地址（非 0.0.0.0 时直接使用）> UDP 探测 LAN IP > `socket.gethostbyname()` > `127.0.0.1`
 

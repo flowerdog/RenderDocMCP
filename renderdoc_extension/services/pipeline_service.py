@@ -7,6 +7,7 @@ import base64
 import renderdoc as rd
 
 from ..utils import Parsers, Serializers, Helpers
+from .. import spirv_cross
 
 
 class PipelineService:
@@ -61,6 +62,7 @@ class PipelineService:
             raise ValueError("No capture loaded")
 
         result = {"shader": None, "error": None}
+        _spirv = {}
 
         def callback(controller):
             controller.SetFrameEvent(event_id, True)
@@ -105,6 +107,18 @@ class PipelineService:
             except Exception as e:
                 shader_info["disassembly_error"] = str(e)
 
+            # Capture raw SPIR-V for potential spirv-cross fallback
+            try:
+                if (reflection
+                        and hasattr(reflection, "encoding")
+                        and reflection.encoding == rd.ShaderEncoding.SPIRV):
+                    raw = reflection.rawBytes
+                    if raw and spirv_cross.is_spirv(raw):
+                        _spirv["raw"] = bytes(raw)
+                        _spirv["entry"] = entry
+            except Exception:
+                pass
+
             # Get constant buffer info
             if reflection:
                 shader_info["constant_buffers"] = self._get_cbuffer_info(
@@ -118,7 +132,62 @@ class PipelineService:
 
         if result["error"]:
             raise ValueError(result["error"])
+
+        if _spirv.get("raw") and result["shader"]:
+            self._apply_spirv_cross_fallback(
+                result["shader"], _spirv, disassembly_target
+            )
+
         return result["shader"]
+
+    # ------------------------------------------------------------------ #
+    #  spirv-cross fallback helpers                                       #
+    # ------------------------------------------------------------------ #
+
+    @classmethod
+    def _spirv_cross_lang_needed(cls, shader_info, disassembly_target):
+        """Determine if spirv-cross should be attempted and for which language.
+
+        Returns the language key ("glsl"/"hlsl") or None.
+        """
+        if disassembly_target:
+            if "disassembly_error" not in shader_info:
+                return None
+            return spirv_cross.parse_lang(disassembly_target)
+
+        chosen = shader_info.get("disassembly_target", "")
+        for pref in cls.PREFERRED_TARGETS:
+            if pref.lower() in chosen.lower():
+                return None
+        return "glsl"
+
+    @classmethod
+    def _apply_spirv_cross_fallback(cls, shader_info, spirv_data, disassembly_target):
+        """Try to improve disassembly output using spirv-cross."""
+        available = shader_info.get("available_disassembly_targets", [])
+
+        if spirv_cross.is_available():
+            for tag in ("GLSL (spirv-cross)", "HLSL (spirv-cross)"):
+                if tag not in available:
+                    available.append(tag)
+            shader_info["available_disassembly_targets"] = available
+
+        lang = cls._spirv_cross_lang_needed(shader_info, disassembly_target)
+        if not lang:
+            return
+
+        code, error = spirv_cross.decompile(
+            spirv_data["raw"], lang, spirv_data.get("entry")
+        )
+
+        if code:
+            shader_info["disassembly"] = code
+            shader_info["disassembly_target"] = "%s (spirv-cross)" % lang.upper()
+            shader_info.pop("disassembly_error", None)
+        elif error and "disassembly_error" in shader_info:
+            shader_info["disassembly_error"] += (
+                "; spirv-cross fallback also failed: " + error
+            )
 
     def get_pipeline_state(self, event_id):
         """Get full pipeline state at an event"""
