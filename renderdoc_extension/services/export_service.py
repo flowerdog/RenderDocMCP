@@ -119,7 +119,7 @@ class ExportService(object):
 
     # ======================== Shader Export ========================
 
-    def export_shader(self, event_id, stage):
+    def export_shader(self, event_id, stage, disassembly_target=None):
         """Export bound shader disassembly to text file and return download URL."""
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
@@ -158,6 +158,21 @@ class ExportService(object):
                     result["error"] = "No disassembly target available"
                     return
 
+                from .pipeline_service import PipelineService
+                chosen, available = PipelineService._choose_disassembly_target(
+                    targets, disassembly_target
+                )
+
+                if chosen is None and disassembly_target:
+                    result["error"] = (
+                        "Requested target '%s' not available. Available: %s"
+                        % (disassembly_target, ", ".join(available))
+                    )
+                    return
+
+                if chosen is None:
+                    chosen = available[0]
+
                 pipe_obj = pipe.GetGraphicsPipelineObject()
                 if stage_enum == rd.ShaderStage.Compute:
                     try:
@@ -165,7 +180,7 @@ class ExportService(object):
                     except Exception:
                         pass
 
-                disasm = controller.DisassembleShader(pipe_obj, reflection, targets[0])
+                disasm = controller.DisassembleShader(pipe_obj, reflection, chosen)
                 if not disasm:
                     result["error"] = "Shader disassembly is empty"
                     return
@@ -174,6 +189,7 @@ class ExportService(object):
                     f.write("// Exported from RenderDoc MCP\n")
                     f.write("// event_id: %d\n" % event_id)
                     f.write("// stage: %s\n" % stage_name)
+                    f.write("// disassembly_target: %s\n" % chosen)
                     f.write("// resource_id: %s\n\n" % str(shader))
                     f.write(disasm)
 
@@ -190,7 +206,8 @@ class ExportService(object):
                     "event_id": event_id,
                     "stage": stage_name,
                     "resource_id": str(shader),
-                    "disassembly_target": str(targets[0]),
+                    "disassembly_target": chosen,
+                    "available_disassembly_targets": available,
                     "format": "txt",
                 }
             except Exception as e:

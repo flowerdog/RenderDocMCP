@@ -55,13 +55,13 @@ RenderDocMCP/
 | `find_draws_by_resource` | 按资源 ID 反向查找 Draw Call |
 | `get_draw_call_details` | 特定 Draw Call 的详细信息 |
 | `get_action_timings` | 获取 Action 的 GPU 执行时间 |
-| `get_shader_info` | Shader 源码 / 常量缓冲区 |
+| `get_shader_info` | Shader 源码 / 常量缓冲区（默认 GLSL，可选 SPIR-V / HLSL 等） |
 | `get_buffer_contents` | 获取缓冲区数据（支持偏移/长度指定） |
 | `get_texture_info` | 纹理元数据 |
 | `get_texture_data` | 纹理像素数据（⚠️ 仅限像素级识别/分析场景，见下方说明） |
 | `get_pipeline_state` | 完整管线状态 |
 | `export_texture` | 导出纹理为 PNG 文件，返回下载 URL（不经过模型） |
-| `export_shader` | 导出 Shader 反汇编为 TXT 文件，返回下载 URL（不经过模型） |
+| `export_shader` | 导出 Shader 反汇编为 TXT 文件，返回下载 URL（默认 GLSL，可选格式） |
 | `export_mesh` | 导出 Draw Call 的 Mesh 为 OBJ 文件，返回下载 URL |
 
 ### ⚠️ get_texture_data 使用限制
@@ -87,6 +87,34 @@ get_draw_calls(
     flags_filter=["Drawcall", "Dispatch"],  # 仅特定标志
 )
 ```
+
+### Shader 反汇编格式选择
+
+`get_shader_info` 和 `export_shader` 均支持 `disassembly_target` 参数，用于指定反汇编输出格式。
+不指定时默认按优先级选择：**GLSL → HLSL → 第一个可用格式**。
+
+```python
+# 默认返回 GLSL（Vulkan 抓帧）/ HLSL（D3D 抓帧）
+get_shader_info(event_id=100, stage="pixel")
+
+# 指定 SPIR-V 原始 IL
+get_shader_info(event_id=100, stage="pixel", disassembly_target="SPIR-V")
+
+# 指定 HLSL
+get_shader_info(event_id=100, stage="pixel", disassembly_target="HLSL")
+```
+
+参数为子串匹配（不区分大小写），常见可用值取决于图形 API：
+
+| 图形 API | 常见可用格式 |
+|----------|-------------|
+| Vulkan | `SPIR-V (IL)`, `GLSL (SPIRV-Cross)`, `Reflection (SPIRV-Cross)` |
+| D3D11 | `DXBC`, `HLSL` |
+| D3D12 | `DXBC` / `DXIL`, `HLSL` |
+| OpenGL | `GLSL` |
+
+返回结果中 `available_disassembly_targets` 列出当前 shader 的全部可用格式，
+`disassembly_target` 标明实际使用的格式。
 
 ### 抓帧管理工具
 
@@ -140,9 +168,13 @@ get_action_timings(marker_filter="Camera.Render", exclude_markers=["GUI.Repaint"
 export_texture(resource_id="ResourceId::12345", event_id=100, mip=0, slice=0)
 # → {"url": "http://192.168.1.100:19877/tex_12345_eid100_mip0.png", "size_bytes": 524288, ...}
 
-# 导出 Shader 反汇编为 TXT
+# 导出 Shader 反汇编为 TXT（默认 GLSL）
 export_shader(event_id=100, stage="pixel")
-# → {"url": "http://192.168.1.100:19877/shader_pixel_eid100.txt", "size_bytes": 16384, ...}
+# → {"url": "...", "disassembly_target": "GLSL (SPIRV-Cross)", "available_disassembly_targets": [...], ...}
+
+# 导出 SPIR-V 格式
+export_shader(event_id=100, stage="pixel", disassembly_target="SPIR-V")
+# → {"url": "...", "disassembly_target": "SPIR-V (IL)", ...}
 
 # 导出 Mesh 为 OBJ
 export_mesh(event_id=100)

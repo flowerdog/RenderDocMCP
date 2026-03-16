@@ -137,9 +137,9 @@ class RenderDocFacade:
 
     # ==================== Pipeline Operations ====================
 
-    def get_shader_info(self, event_id, stage):
+    def get_shader_info(self, event_id, stage, disassembly_target=None):
         """Get shader information for a specific stage"""
-        return self._pipeline.get_shader_info(event_id, stage)
+        return self._pipeline.get_shader_info(event_id, stage, disassembly_target)
 
     def get_pipeline_state(self, event_id):
         """Get full pipeline state at an event"""
@@ -170,11 +170,11 @@ class RenderDocFacade:
             raise ValueError("Export service not configured")
         return self._export.export_texture(resource_id, event_id, mip, slice_index)
 
-    def export_shader(self, event_id, stage):
+    def export_shader(self, event_id, stage, disassembly_target=None):
         """Export shader disassembly to TXT and return download URL"""
         if self._export is None:
             raise ValueError("Export service not configured")
-        return self._export.export_shader(event_id, stage)
+        return self._export.export_shader(event_id, stage, disassembly_target)
 
     def export_mesh(self, event_id):
         """Export mesh to OBJ and return download URL"""

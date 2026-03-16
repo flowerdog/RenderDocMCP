@@ -138,7 +138,8 @@ class RequestHandler:
             raise ValueError("event_id is required")
         if stage is None:
             raise ValueError("stage is required")
-        return self.facade.get_shader_info(int(event_id), stage)
+        disassembly_target = params.get("disassembly_target")
+        return self.facade.get_shader_info(int(event_id), stage, disassembly_target)
 
     def _handle_get_buffer_contents(self, params):
         """Handle get_buffer_contents request"""
@@ -238,4 +239,5 @@ class RequestHandler:
         stage = params.get("stage")
         if stage is None:
             raise ValueError("stage is required")
-        return self.facade.export_shader(int(event_id), stage)
+        disassembly_target = params.get("disassembly_target")
+        return self.facade.export_shader(int(event_id), stage, disassembly_target)

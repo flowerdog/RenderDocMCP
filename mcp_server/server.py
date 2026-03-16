@@ -183,6 +183,7 @@ def get_action_timings(
 def get_shader_info(
     event_id: int,
     stage: Literal["vertex", "hull", "domain", "geometry", "pixel", "compute"],
+    disassembly_target: str | None = None,
 ) -> dict:
     """
     Get shader information for a specific stage at a given event.
@@ -190,10 +191,17 @@ def get_shader_info(
     Args:
         event_id: The event ID to inspect the shader at
         stage: The shader stage (vertex, hull, domain, geometry, pixel, compute)
+        disassembly_target: Disassembly format to use (substring match, case-insensitive).
+            Defaults to GLSL when available, then HLSL, then the first target.
+            Common values: "GLSL", "SPIR-V", "HLSL", "DXBC", "DXIL".
+            The response includes available_disassembly_targets listing all options.
 
     Returns shader disassembly, constant buffer values, and resource bindings.
     """
-    return bridge.call("get_shader_info", {"event_id": event_id, "stage": stage})
+    params: dict[str, object] = {"event_id": event_id, "stage": stage}
+    if disassembly_target is not None:
+        params["disassembly_target"] = disassembly_target
+    return bridge.call("get_shader_info", params)
 
 
 @mcp.tool
@@ -352,6 +360,7 @@ def export_texture(
 def export_shader(
     event_id: int,
     stage: Literal["vertex", "hull", "domain", "geometry", "pixel", "compute"],
+    disassembly_target: str | None = None,
 ) -> dict:
     """
     Export the bound shader disassembly at a draw/dispatch event and return a download URL.
@@ -363,10 +372,17 @@ def export_shader(
     Args:
         event_id: The event ID at which to inspect the pipeline
         stage: Shader stage to export (vertex, hull, domain, geometry, pixel, compute)
+        disassembly_target: Disassembly format to use (substring match, case-insensitive).
+            Defaults to GLSL when available, then HLSL, then the first target.
+            Common values: "GLSL", "SPIR-V", "HLSL", "DXBC", "DXIL".
+            The response includes available_disassembly_targets listing all options.
 
     Returns dict with url, filename, size_bytes, shader metadata, and export format.
     """
-    return bridge.call("export_shader", {"event_id": event_id, "stage": stage})
+    params: dict[str, object] = {"event_id": event_id, "stage": stage}
+    if disassembly_target is not None:
+        params["disassembly_target"] = disassembly_target
+    return bridge.call("export_shader", params)
 
 
 @mcp.tool

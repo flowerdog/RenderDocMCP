@@ -23,7 +23,39 @@ class PipelineService:
             return pipe.GetComputePipelineObject()
         return pipe.GetGraphicsPipelineObject()
 
-    def get_shader_info(self, event_id, stage):
+    # Preferred disassembly targets in priority order (case-insensitive substring match).
+    PREFERRED_TARGETS = ["GLSL", "HLSL"]
+
+    @staticmethod
+    def _choose_disassembly_target(targets, requested=None):
+        """Pick the best disassembly target string from *targets*.
+
+        If *requested* is given, find the first target containing that
+        substring (case-insensitive).  Otherwise walk PREFERRED_TARGETS and
+        pick the first match; fall back to targets[0].
+
+        Returns (chosen_target, available_list).
+        """
+        available = [str(t) for t in targets]
+        if not available:
+            return None, available
+
+        if requested:
+            req_lower = requested.lower()
+            for t in available:
+                if req_lower in t.lower():
+                    return t, available
+            return None, available
+
+        for pref in PipelineService.PREFERRED_TARGETS:
+            pref_lower = pref.lower()
+            for t in available:
+                if pref_lower in t.lower():
+                    return t, available
+
+        return available[0], available
+
+    def get_shader_info(self, event_id, stage, disassembly_target=None):
         """Get shader information for a specific stage"""
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
@@ -53,12 +85,23 @@ class PipelineService:
             # Get disassembly
             try:
                 targets = controller.GetDisassemblyTargets(True)
-                if targets:
+                chosen, available = self._choose_disassembly_target(
+                    targets, disassembly_target
+                )
+                shader_info["available_disassembly_targets"] = available
+
+                if chosen is None and disassembly_target:
+                    shader_info["disassembly_error"] = (
+                        "Requested target '%s' not available. Available: %s"
+                        % (disassembly_target, ", ".join(available))
+                    )
+                elif chosen is not None:
                     pipe_obj = self._get_pipeline_object(pipe, stage_enum)
                     disasm = controller.DisassembleShader(
-                        pipe_obj, reflection, targets[0]
+                        pipe_obj, reflection, chosen
                     )
                     shader_info["disassembly"] = disasm
+                    shader_info["disassembly_target"] = chosen
             except Exception as e:
                 shader_info["disassembly_error"] = str(e)
 
