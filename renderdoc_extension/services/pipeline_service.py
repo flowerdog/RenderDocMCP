@@ -207,6 +207,9 @@ class PipelineService:
                 "api": str(api),
             }
 
+            # Build resource lookup once to avoid repeated O(N) scans per binding.
+            resource_lookup = self._build_resource_lookup(controller)
+
             # Shader stages with detailed bindings
             stages = {}
             stage_list = Helpers.get_all_shader_stages()
@@ -221,10 +224,10 @@ class PipelineService:
                     reflection = pipe.GetShaderReflection(stage)
 
                     stage_info["resources"] = self._get_stage_resources(
-                        controller, pipe, stage, reflection
+                        pipe, stage, reflection, resource_lookup
                     )
                     stage_info["uavs"] = self._get_stage_uavs(
-                        controller, pipe, stage, reflection
+                        pipe, stage, reflection, resource_lookup
                     )
                     stage_info["samplers"] = self._get_stage_samplers(
                         pipe, stage, reflection
@@ -397,7 +400,7 @@ class PipelineService:
             raise ValueError(result["error"])
         return result["data"]
 
-    def _get_stage_resources(self, controller, pipe, stage, reflection):
+    def _get_stage_resources(self, pipe, stage, reflection, resource_lookup=None):
         """Get shader resource views (SRVs) for a stage"""
         resources = []
         try:
@@ -420,7 +423,7 @@ class PipelineService:
                 }
 
                 res_info.update(
-                    self._get_resource_details(controller, srv.descriptor.resource)
+                    self._get_resource_details(srv.descriptor.resource, resource_lookup)
                 )
 
                 res_info["first_mip"] = srv.descriptor.firstMip
@@ -434,7 +437,7 @@ class PipelineService:
 
         return resources
 
-    def _get_stage_uavs(self, controller, pipe, stage, reflection):
+    def _get_stage_uavs(self, pipe, stage, reflection, resource_lookup=None):
         """Get unordered access views (UAVs) for a stage"""
         uavs = []
         try:
@@ -457,7 +460,7 @@ class PipelineService:
                 }
 
                 uav_info.update(
-                    self._get_resource_details(controller, uav.descriptor.resource)
+                    self._get_resource_details(uav.descriptor.resource, resource_lookup)
                 )
 
                 uav_info["first_element"] = uav.descriptor.firstMip
@@ -563,9 +566,45 @@ class PipelineService:
 
         return cbuffers
 
-    def _get_resource_details(self, controller, resource_id):
-        """Get details about a resource (texture or buffer)"""
+    def _build_resource_lookup(self, controller):
+        """Build a map of resourceId string -> metadata for fast binding lookups."""
+        lookup = {}
+
+        try:
+            for tex in controller.GetTextures():
+                rid = str(tex.resourceId)
+                lookup[rid] = {
+                    "type": "texture",
+                    "width": tex.width,
+                    "height": tex.height,
+                    "depth": tex.depth,
+                    "array_size": tex.arraysize,
+                    "mip_levels": tex.mips,
+                    "format": str(tex.format.Name()),
+                    "dimension": str(tex.type),
+                    "msaa_samples": tex.msSamp,
+                }
+        except Exception:
+            pass
+
+        try:
+            for buf in controller.GetBuffers():
+                rid = str(buf.resourceId)
+                # Keep richer texture metadata if duplicated (rare).
+                if rid not in lookup:
+                    lookup[rid] = {"type": "buffer", "length": buf.length}
+        except Exception:
+            pass
+
+        return lookup
+
+    def _get_resource_details(self, resource_id, resource_lookup=None):
+        """Get details about a resource (texture or buffer)."""
         details = {}
+
+        rid = str(resource_id)
+        if resource_lookup and rid in resource_lookup:
+            details.update(resource_lookup[rid])
 
         try:
             resource_name = self.ctx.GetResourceName(resource_id)
@@ -573,25 +612,6 @@ class PipelineService:
                 details["resource_name"] = resource_name
         except Exception:
             pass
-
-        for tex in controller.GetTextures():
-            if tex.resourceId == resource_id:
-                details["type"] = "texture"
-                details["width"] = tex.width
-                details["height"] = tex.height
-                details["depth"] = tex.depth
-                details["array_size"] = tex.arraysize
-                details["mip_levels"] = tex.mips
-                details["format"] = str(tex.format.Name())
-                details["dimension"] = str(tex.type)
-                details["msaa_samples"] = tex.msSamp
-                return details
-
-        for buf in controller.GetBuffers():
-            if buf.resourceId == resource_id:
-                details["type"] = "buffer"
-                details["length"] = buf.length
-                return details
 
         return details
 

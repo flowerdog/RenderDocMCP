@@ -8,6 +8,7 @@ Protocol: 4-byte big-endian length prefix + JSON payload (UTF-8)
 import json
 import socket
 import struct
+import time
 import traceback
 
 from PySide2.QtCore import QObject, QTimer
@@ -143,6 +144,8 @@ class MCPBridgeServer(QObject):
             self._send_response(response)
             return
 
+        method = request.get("method")
+        start_time = time.time()
         try:
             response = self.handler.handle(request)
         except Exception as e:
@@ -151,6 +154,14 @@ class MCPBridgeServer(QObject):
                 "id": request.get("id"),
                 "error": {"code": -32603, "message": str(e)}
             }
+        finally:
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            # Keep logs compact; only print slow calls for runtime diagnosis.
+            if elapsed_ms >= 1000:
+                print(
+                    "[MCP Bridge] Slow request: method=%s, elapsed_ms=%d"
+                    % (method, elapsed_ms)
+                )
 
         self._send_response(response)
 

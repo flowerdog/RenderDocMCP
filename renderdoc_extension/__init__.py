@@ -82,6 +82,12 @@ def register(version, ctx):
     _version = version
     _context = ctx
 
+    # RenderDoc may call register multiple times in one session.
+    # Guard against duplicate server/process creation.
+    if _server and _server.is_running():
+        print("[MCP Bridge] register() called while already running; skip duplicate start")
+        return
+
     # Start HTTP file server for exports
     _file_server = file_server.ExportFileServer(
         export_dir=_export_dir,
