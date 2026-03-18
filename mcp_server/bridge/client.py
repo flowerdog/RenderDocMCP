@@ -27,8 +27,8 @@ class RenderDocBridge:
     def __init__(self, host: str = "127.0.0.1", port: int = 19876):
         self.host = host
         self.port = port
-        # Allow tuning for heavier queries (e.g. get_pipeline_state on large captures).
-        self.timeout = float(os.environ.get("RENDERDOC_MCP_TIMEOUT", "120"))
+        self.connect_timeout = 5.0
+        self.recv_timeout = float(os.environ.get("RENDERDOC_MCP_TIMEOUT", "30"))
         self._socket: socket.socket | None = None
 
     def call(self, method: str, params: dict[str, Any] | None = None) -> Any:
@@ -58,40 +58,16 @@ class RenderDocBridge:
 
             return response.get("result")
 
+        except RenderDocBridgeError:
+            raise
+        except (socket.timeout, TimeoutError, ConnectionError, OSError) as e:
+            self._disconnect()
+            raise RenderDocBridgeError(
+                f"Connection lost to RenderDoc MCP Bridge at {self.host}:{self.port}: {e}"
+            )
         except Exception as e:
             self._disconnect()
-            # Retry once on transient socket/timeout issues.
-            if isinstance(e, (socket.timeout, TimeoutError, ConnectionError, OSError)):
-                return self._retry_once(request)
-            if isinstance(e, RenderDocBridgeError):
-                raise
             raise RenderDocBridgeError(f"Communication error: {e}")
-
-    def _retry_once(self, request: dict[str, Any]) -> Any:
-        """Reconnect and retry one request once."""
-        try:
-            self._ensure_connected()
-
-            payload = json.dumps(request).encode("utf-8")
-            frame = struct.pack("!I", len(payload)) + payload
-            self._socket.sendall(frame)
-
-            header = self._recv_exact(self.HEADER_SIZE)
-            msg_len = struct.unpack("!I", header)[0]
-            resp_data = self._recv_exact(msg_len)
-
-            response = json.loads(resp_data.decode("utf-8"))
-            if "error" in response:
-                error = response["error"]
-                raise RenderDocBridgeError(f"[{error['code']}] {error['message']}")
-            return response.get("result")
-        except Exception as retry_error:
-            self._disconnect()
-            if isinstance(retry_error, RenderDocBridgeError):
-                raise
-            raise RenderDocBridgeError(
-                f"Communication error after retry: {retry_error}"
-            )
 
     def _ensure_connected(self):
         """Establish TCP connection if not already connected"""
@@ -100,8 +76,17 @@ class RenderDocBridge:
 
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(self.timeout)
+            sock.settimeout(self.connect_timeout)
             sock.connect((self.host, self.port))
+
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            try:
+                # Windows: idle 30s, interval 5s, max 3 failures
+                sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 30000, 5000))
+            except (AttributeError, OSError):
+                pass
+
+            sock.settimeout(self.recv_timeout)
             self._socket = sock
         except Exception as e:
             raise RenderDocBridgeError(

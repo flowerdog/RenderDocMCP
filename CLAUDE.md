@@ -220,6 +220,16 @@ TCP Socket（长度前缀帧协议）：
 
 URL 主机地址解析优先级：`RENDERDOC_MCP_EXTERNAL_HOST` > 绑定地址（非 0.0.0.0 时直接使用）> UDP 探测 LAN IP > `socket.gethostbyname()` > `127.0.0.1`
 
+## 连接管理设计
+
+**单活连接模型**：RenderDoc 插件侧的 TCP 服务器同时只维护一条活跃客户端连接。
+
+- 新连接到来时，如果已有旧连接，旧连接被主动关闭并替换
+- TCP Keepalive 在客户端和服务端两侧均启用（Windows: idle 30s, interval 5s），用于检测半开连接
+- 应用层 idle 超时（默认 5 分钟），超过无活动时间的连接被主动清理
+- MCP Server 进程的 TCP 客户端使用懒连接 + 出错断开策略，下次调用自动重连
+- connect timeout（5s）和 recv timeout（30s，可通过 `RENDERDOC_MCP_TIMEOUT` 覆盖）分离
+
 ## 开发笔记
 
 - RenderDoc 内置 Python 默认不包含 `_socket.pyd`，需从标准 CPython 手动补充（详见 `docs/tcp-migration-plan.md`）
