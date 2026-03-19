@@ -235,12 +235,17 @@ TOOLS = [
         name="export_mesh",
         description=(
             "Export the mesh geometry at a draw call to OBJ file and return a download URL. "
-            "Extracts vertex positions, normals, and texture coordinates."
+            "Extracts vertex positions, normals, and texture coordinates. "
+            "By default, auto-detects the graphics API and applies coordinate/UV conventions: "
+            "for Vulkan/D3D captures, flips UV V-coordinate and converts left-hand to right-hand "
+            "(negate X + reverse winding); for OpenGL, no conversion is applied."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "event_id": {"type": "integer", "description": "The event ID of the draw call whose mesh to export"},
+                "flip_uv_v": {"type": "boolean", "description": "Flip V texcoord (1-v) for OBJ convention. Default: auto-detect (true for Vulkan/D3D, false for OpenGL)"},
+                "flip_handedness": {"type": "boolean", "description": "Convert left-hand to right-hand coordinate system (negate X + reverse winding). Default: auto-detect (true for Vulkan/D3D, false for OpenGL)"},
             },
             "required": ["event_id"],
         },

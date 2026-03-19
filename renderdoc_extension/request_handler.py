@@ -229,7 +229,10 @@ class RequestHandler:
         event_id = params.get("event_id")
         if event_id is None:
             raise ValueError("event_id is required")
-        return self.facade.export_mesh(int(event_id))
+        flip_uv_v = params.get("flip_uv_v")
+        flip_handedness = params.get("flip_handedness")
+        return self.facade.export_mesh(int(event_id), flip_uv_v=flip_uv_v,
+                                       flip_handedness=flip_handedness)
 
     def _handle_export_shader(self, params):
         """Handle export_shader request"""

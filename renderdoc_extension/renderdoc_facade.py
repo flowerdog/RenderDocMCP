@@ -176,8 +176,9 @@ class RenderDocFacade:
             raise ValueError("Export service not configured")
         return self._export.export_shader(event_id, stage, disassembly_target)
 
-    def export_mesh(self, event_id):
+    def export_mesh(self, event_id, flip_uv_v=None, flip_handedness=None):
         """Export mesh to OBJ and return download URL"""
         if self._export is None:
             raise ValueError("Export service not configured")
-        return self._export.export_mesh(event_id)
+        return self._export.export_mesh(event_id, flip_uv_v=flip_uv_v,
+                                        flip_handedness=flip_handedness)

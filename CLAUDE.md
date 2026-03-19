@@ -63,7 +63,7 @@ RenderDocMCP/
 | `get_pipeline_state` | 完整管线状态 |
 | `export_texture` | 导出纹理为 PNG 文件，返回下载 URL（不经过模型） |
 | `export_shader` | 导出 Shader 反汇编为 TXT 文件，返回下载 URL（默认 GLSL，可选格式） |
-| `export_mesh` | 导出 Draw Call 的 Mesh 为 OBJ 文件，返回下载 URL |
+| `export_mesh` | 导出 Draw Call 的 Mesh 为 OBJ 文件，返回下载 URL（自动坐标系/UV 转换） |
 
 ### ⚠️ get_texture_data 使用限制
 
@@ -188,10 +188,29 @@ export_shader(event_id=100, stage="pixel")
 export_shader(event_id=100, stage="pixel", disassembly_target="SPIR-V")
 # → {"url": "...", "disassembly_target": "SPIR-V (IL)", ...}
 
-# 导出 Mesh 为 OBJ
+# 导出 Mesh 为 OBJ（默认按 API 自动转换坐标系和 UV）
 export_mesh(event_id=100)
-# → {"url": "http://192.168.1.100:19877/mesh_eid100.obj", "vertex_count": 1500, "face_count": 3000, ...}
+# → {"url": "...", "vertex_count": 1500, "face_count": 3000, "api": "GraphicsAPI.Vulkan",
+#    "flip_uv_v": true, "flip_handedness": true, ...}
+
+# 手动覆盖：不做任何转换（原始数据）
+export_mesh(event_id=100, flip_uv_v=False, flip_handedness=False)
 ```
+
+### export_mesh 坐标系与 UV 自动转换
+
+`export_mesh` 导出 OBJ 时会根据抓帧的图形 API 自动应用坐标系和 UV 转换，确保导入 Unity 等工具后结果正确：
+
+| 图形 API | UV V 翻转 (1-v) | 坐标系转换 (翻转 X + 反转绕序) | 原因 |
+|----------|:---:|:---:|------|
+| Vulkan | ✓ | ✓ | UV 原点在左上；左手坐标系 |
+| D3D11 / D3D12 | ✓ | ✓ | UV 原点在左上；左手坐标系 |
+| OpenGL | ✗ | ✗ | UV 原点在左下；右手坐标系（匹配 OBJ 惯例） |
+
+可通过 `flip_uv_v` 和 `flip_handedness` 参数显式覆盖自动推断：
+- `None`（默认）：按 API 自动推断
+- `True`：强制启用
+- `False`：强制禁用
 
 ## 通信协议
 

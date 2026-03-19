@@ -332,8 +332,18 @@ class ExportService(object):
 
     # ======================== Mesh Export ========================
 
-    def export_mesh(self, event_id):
-        """Export mesh at a draw call to OBJ file and return download URL."""
+    def export_mesh(self, event_id, flip_uv_v=None, flip_handedness=None):
+        """Export mesh at a draw call to OBJ file and return download URL.
+
+        Args:
+            event_id: The event ID of the draw call.
+            flip_uv_v: Flip V texcoord (1-v) for OBJ convention.
+                None = auto-detect from graphics API (flip for Vulkan/D3D, keep for OpenGL).
+                True = always flip. False = never flip.
+            flip_handedness: Convert left-hand to right-hand for OBJ (negate X + reverse winding).
+                None = auto-detect from graphics API (flip for Vulkan/D3D, keep for OpenGL).
+                True = always flip. False = never flip.
+        """
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
 
@@ -344,10 +354,23 @@ class ExportService(object):
         output_path = os.path.join(self.export_dir, filename)
 
         result = {"data": None, "error": None}
+        opts = {"flip_uv_v": flip_uv_v, "flip_hand": flip_handedness}
 
         def callback(controller):
             try:
                 controller.SetFrameEvent(event_id, True)
+
+                # Auto-detect coordinate conventions from graphics API
+                api = controller.GetAPIProperties().pipelineType
+                is_opengl = (api == rd.GraphicsAPI.OpenGL)
+
+                do_flip_uv = opts["flip_uv_v"]
+                if do_flip_uv is None:
+                    do_flip_uv = not is_opengl
+
+                do_flip_hand = opts["flip_hand"]
+                if do_flip_hand is None:
+                    do_flip_hand = not is_opengl
 
                 draw = self.ctx.GetAction(event_id)
                 if draw is None:
@@ -363,8 +386,8 @@ class ExportService(object):
                     result["error"] = "No vertex inputs at event_id %d" % event_id
                     return
 
-                print("[ExportMesh] eid=%d, %d vertex attrs: %s"
-                      % (event_id, len(attrs),
+                print("[ExportMesh] eid=%d, api=%s, flip_uv=%s, flip_hand=%s, %d vertex attrs: %s"
+                      % (event_id, str(api), do_flip_uv, do_flip_hand, len(attrs),
                          [(a.name, "inst" if a.perInstance else "vert",
                            str(a.format.compType), a.format.compCount,
                            a.format.compByteWidth)
@@ -434,19 +457,28 @@ class ExportService(object):
                 with open(output_path, "w") as f:
                     f.write("# Exported from RenderDoc MCP - event_id %d\n" % event_id)
                     f.write("# Vertices: %d, Faces: %d\n" % (len(positions), face_count))
+                    f.write("# API: %s, flip_uv_v: %s, flip_handedness: %s\n"
+                            % (str(api), do_flip_uv, do_flip_hand))
                     f.write("\n")
 
                     for p in positions:
-                        if len(p) >= 3:
-                            f.write("v %s %s %s\n" % (p[0], p[1], p[2]))
-                        elif len(p) == 2:
-                            f.write("v %s %s 0\n" % (p[0], p[1]))
+                        if do_flip_hand:
+                            if len(p) >= 3:
+                                f.write("v %s %s %s\n" % (-p[0], p[1], p[2]))
+                            elif len(p) == 2:
+                                f.write("v %s %s 0\n" % (-p[0], p[1]))
+                        else:
+                            if len(p) >= 3:
+                                f.write("v %s %s %s\n" % (p[0], p[1], p[2]))
+                            elif len(p) == 2:
+                                f.write("v %s %s 0\n" % (p[0], p[1]))
 
                     if has_texcoords:
                         f.write("\n")
                         for t in texcoords:
                             if len(t) >= 2:
-                                f.write("vt %s %s\n" % (t[0], t[1]))
+                                v_coord = 1.0 - t[1] if do_flip_uv else t[1]
+                                f.write("vt %s %s\n" % (t[0], v_coord))
                             elif len(t) == 1:
                                 f.write("vt %s 0\n" % t[0])
 
@@ -454,14 +486,21 @@ class ExportService(object):
                         f.write("\n")
                         for n in normals:
                             if len(n) >= 3:
-                                f.write("vn %s %s %s\n" % (n[0], n[1], n[2]))
+                                if do_flip_hand:
+                                    f.write("vn %s %s %s\n" % (-n[0], n[1], n[2]))
+                                else:
+                                    f.write("vn %s %s %s\n" % (n[0], n[1], n[2]))
 
                     f.write("\n")
                     for i in range(0, len(indices) - 2, 3):
                         # OBJ indices are 1-based
                         i0 = index_remap[indices[i]] + 1
-                        i1 = index_remap[indices[i + 1]] + 1
-                        i2 = index_remap[indices[i + 2]] + 1
+                        if do_flip_hand:
+                            i1 = index_remap[indices[i + 2]] + 1
+                            i2 = index_remap[indices[i + 1]] + 1
+                        else:
+                            i1 = index_remap[indices[i + 1]] + 1
+                            i2 = index_remap[indices[i + 2]] + 1
 
                         if has_texcoords and has_normals:
                             f.write("f %d/%d/%d %d/%d/%d %d/%d/%d\n"
@@ -486,6 +525,9 @@ class ExportService(object):
                     "face_count": face_count,
                     "has_normals": has_normals,
                     "has_texcoords": has_texcoords,
+                    "api": str(api),
+                    "flip_uv_v": do_flip_uv,
+                    "flip_handedness": do_flip_hand,
                     "format": "obj",
                 }
             except Exception as e:
