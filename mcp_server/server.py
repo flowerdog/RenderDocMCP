@@ -203,9 +203,7 @@ TOOLS = [
         description=(
             "Export a texture to PNG file and return a download URL. "
             "The texture is saved to the export directory on the RenderDoc host and served via HTTP. "
-            "By default, auto-detects whether the image needs vertical flipping: "
-            "render targets rendered with inverted viewports (e.g. Unity on Vulkan) or "
-            "OpenGL framebuffers are automatically flipped so the exported PNG is right-side-up."
+            "Render targets are automatically exported right-side-up."
         ),
         inputSchema={
             "type": "object",
@@ -214,7 +212,7 @@ TOOLS = [
                 "event_id": {"type": "integer", "description": "The event ID at which to capture the texture state"},
                 "mip": {"type": "integer", "description": "Mip level to export (default: 0)", "default": 0},
                 "slice": {"type": "integer", "description": "Array slice or cube face index (default: 0)", "default": 0},
-                "flip_y": {"type": "boolean", "description": "Flip image vertically. Default: auto-detect (flip render targets with inverted viewport or OpenGL framebuffers; keep regular textures as-is)"},
+                "flip_y": {"type": "boolean", "description": "Override vertical flip. Default: auto-detect based on API and render target status"},
             },
             "required": ["resource_id", "event_id"],
         },
@@ -240,16 +238,14 @@ TOOLS = [
         description=(
             "Export the mesh geometry at a draw call to OBJ file and return a download URL. "
             "Extracts vertex positions, normals, and texture coordinates. "
-            "By default, auto-detects the graphics API and applies coordinate/UV conventions: "
-            "for Vulkan/D3D captures, flips UV V-coordinate and converts left-hand to right-hand "
-            "(negate X + reverse winding); for OpenGL, no conversion is applied."
+            "Coordinate system and UV conventions are automatically matched to the OBJ format."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "event_id": {"type": "integer", "description": "The event ID of the draw call whose mesh to export"},
-                "flip_uv_v": {"type": "boolean", "description": "Flip V texcoord (1-v) for OBJ convention. Default: auto-detect (true for Vulkan/D3D, false for OpenGL)"},
-                "flip_handedness": {"type": "boolean", "description": "Convert left-hand to right-hand coordinate system (negate X + reverse winding). Default: auto-detect (true for Vulkan/D3D, false for OpenGL)"},
+                "flip_uv_v": {"type": "boolean", "description": "Override UV V-coordinate flip. Default: auto-detect based on graphics API"},
+                "flip_handedness": {"type": "boolean", "description": "Override coordinate system handedness conversion. Default: auto-detect based on graphics API"},
             },
             "required": ["event_id"],
         },

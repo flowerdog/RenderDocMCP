@@ -61,7 +61,7 @@ RenderDocMCP/
 | `get_texture_info` | 纹理元数据 |
 | `get_texture_data` | 纹理像素数据（⚠️ 仅限像素级识别/分析场景，见下方说明） |
 | `get_pipeline_state` | 完整管线状态 |
-| `export_texture` | 导出纹理为 PNG 文件，返回下载 URL（自动翻转 RT，不经过模型） |
+| `export_texture` | 导出纹理为 PNG 文件，返回下载 URL（不经过模型） |
 | `export_shader` | 导出 Shader 反汇编为 TXT 文件，返回下载 URL（默认 GLSL，可选格式） |
 | `export_mesh` | 导出 Draw Call 的 Mesh 为 OBJ 文件，返回下载 URL（自动坐标系/UV 转换） |
 
@@ -176,12 +176,9 @@ get_action_timings(marker_filter="Camera.Render", exclude_markers=["GUI.Repaint"
 返回值仅包含 URL 和元信息，**大文件数据不经过 AI 模型上下文**。
 
 ```python
-# 导出纹理为 PNG（自动检测并翻转颠倒的 RT）
+# 导出纹理为 PNG
 export_texture(resource_id="ResourceId::12345", event_id=100, mip=0, slice=0)
-# → {"url": "...", "size_bytes": 524288, "is_render_target": true, "flip_y": true, ...}
-
-# 手动控制：强制不翻转
-export_texture(resource_id="ResourceId::12345", event_id=100, flip_y=False)
+# → {"url": "...", "size_bytes": 524288, ...}
 
 # 导出 Shader 反汇编为 TXT（默认 GLSL）
 export_shader(event_id=100, stage="pixel")
@@ -191,47 +188,10 @@ export_shader(event_id=100, stage="pixel")
 export_shader(event_id=100, stage="pixel", disassembly_target="SPIR-V")
 # → {"url": "...", "disassembly_target": "SPIR-V (IL)", ...}
 
-# 导出 Mesh 为 OBJ（默认按 API 自动转换坐标系和 UV）
+# 导出 Mesh 为 OBJ
 export_mesh(event_id=100)
-# → {"url": "...", "vertex_count": 1500, "face_count": 3000, "api": "GraphicsAPI.Vulkan",
-#    "flip_uv_v": true, "flip_handedness": true, ...}
-
-# 手动覆盖：不做任何转换（原始数据）
-export_mesh(event_id=100, flip_uv_v=False, flip_handedness=False)
+# → {"url": "...", "vertex_count": 1500, "face_count": 3000, ...}
 ```
-
-### export_mesh 坐标系与 UV 自动转换
-
-`export_mesh` 导出 OBJ 时会根据抓帧的图形 API 自动应用坐标系和 UV 转换，确保导入 Unity 等工具后结果正确：
-
-| 图形 API | UV V 翻转 (1-v) | 坐标系转换 (翻转 X + 反转绕序) | 原因 |
-|----------|:---:|:---:|------|
-| Vulkan | ✓ | ✓ | UV 原点在左上；左手坐标系 |
-| D3D11 / D3D12 | ✓ | ✓ | UV 原点在左上；左手坐标系 |
-| OpenGL | ✗ | ✗ | UV 原点在左下；右手坐标系（匹配 OBJ 惯例） |
-
-可通过 `flip_uv_v` 和 `flip_handedness` 参数显式覆盖自动推断：
-- `None`（默认）：按 API 自动推断
-- `True`：强制启用
-- `False`：强制禁用
-
-### export_texture 渲染目标自动翻转
-
-`export_texture` 导出 PNG 时会自动检测纹理是否为渲染目标（Render Target），
-并根据 API 和 Viewport 状态判断是否需要垂直翻转，确保导出的图片方向正确：
-
-| 条件 | 自动翻转？ | 原因 |
-|------|:---:|------|
-| 普通纹理（非 RT） | ✗ | 纹理数据本身方向正确 |
-| OpenGL RT | ✓ | OpenGL 帧缓冲区原点在左下 |
-| Vulkan RT + 负 Viewport Height | ✓ | Unity 等引擎在 Vulkan 上使用 Y-flip 投影 |
-| Vulkan RT + 正 Viewport Height | ✗ | 正常渲染，无需翻转 |
-| D3D RT | ✗ | D3D 帧缓冲区原点在左上（与 PNG 一致） |
-
-检测依据：`TextureDescription.creationFlags` 中的 `ColorTarget`/`DepthTarget` 标志
-判断纹理是否为 RT，再结合 `GetViewportScissor().viewports[0].height` 的符号判断是否翻转。
-
-可通过 `flip_y` 参数显式覆盖：`None`（默认自动检测）、`True`（强制翻转）、`False`（不翻转）。
 
 ## 通信协议
 
