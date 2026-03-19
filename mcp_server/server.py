@@ -202,7 +202,10 @@ TOOLS = [
         name="export_texture",
         description=(
             "Export a texture to PNG file and return a download URL. "
-            "The texture is saved to the export directory on the RenderDoc host and served via HTTP."
+            "The texture is saved to the export directory on the RenderDoc host and served via HTTP. "
+            "By default, auto-detects whether the image needs vertical flipping: "
+            "render targets rendered with inverted viewports (e.g. Unity on Vulkan) or "
+            "OpenGL framebuffers are automatically flipped so the exported PNG is right-side-up."
         ),
         inputSchema={
             "type": "object",
@@ -211,6 +214,7 @@ TOOLS = [
                 "event_id": {"type": "integer", "description": "The event ID at which to capture the texture state"},
                 "mip": {"type": "integer", "description": "Mip level to export (default: 0)", "default": 0},
                 "slice": {"type": "integer", "description": "Array slice or cube face index (default: 0)", "default": 0},
+                "flip_y": {"type": "boolean", "description": "Flip image vertically. Default: auto-detect (flip render targets with inverted viewport or OpenGL framebuffers; keep regular textures as-is)"},
             },
             "required": ["resource_id", "event_id"],
         },

@@ -164,11 +164,13 @@ class RenderDocFacade:
 
     # ==================== Export Operations ====================
 
-    def export_texture(self, resource_id, event_id, mip=0, slice_index=0):
+    def export_texture(self, resource_id, event_id, mip=0, slice_index=0,
+                       flip_y=None):
         """Export texture to PNG and return download URL"""
         if self._export is None:
             raise ValueError("Export service not configured")
-        return self._export.export_texture(resource_id, event_id, mip, slice_index)
+        return self._export.export_texture(resource_id, event_id, mip,
+                                           slice_index, flip_y=flip_y)
 
     def export_shader(self, event_id, stage, disassembly_target=None):
         """Export shader disassembly to TXT and return download URL"""

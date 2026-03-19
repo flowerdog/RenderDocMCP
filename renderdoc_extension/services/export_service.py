@@ -8,6 +8,7 @@ Compatible with Python 3.6 (no f-strings).
 import os
 import struct
 import time
+import zlib
 
 import renderdoc as rd
 
@@ -52,8 +53,21 @@ class ExportService(object):
 
     # ======================== Texture Export ========================
 
-    def export_texture(self, resource_id, event_id, mip=0, slice_index=0):
-        """Export a texture to PNG file and return download URL."""
+    def export_texture(self, resource_id, event_id, mip=0, slice_index=0,
+                       flip_y=None):
+        """Export a texture to PNG file and return download URL.
+
+        Args:
+            resource_id: The resource ID of the texture to export.
+            event_id: The event ID at which to capture the texture state.
+            mip: Mip level to export (default 0).
+            slice_index: Array slice / cube face (default 0).
+            flip_y: Flip image vertically.
+                None = auto-detect: flip only render targets when the
+                       API / viewport indicates inverted rendering
+                       (OpenGL framebuffers, Vulkan with negative viewport height).
+                True = always flip.  False = never flip.
+        """
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
 
@@ -65,23 +79,39 @@ class ExportService(object):
         output_path = os.path.join(self.export_dir, filename)
 
         result = {"data": None, "error": None}
+        opts = {"flip_y": flip_y}
 
         def callback(controller):
             try:
                 controller.SetFrameEvent(event_id, True)
 
-                # Find the texture resource
+                api = controller.GetAPIProperties().pipelineType
+
+                # Find the texture resource and check if it is a render target
                 target_id = numeric_id
                 tex_rid = None
+                is_rt = False
                 for tex in controller.GetTextures():
                     tex_id = Parsers.extract_numeric_id(str(tex.resourceId))
                     if tex_id == target_id:
                         tex_rid = tex.resourceId
+                        try:
+                            flags = int(tex.creationFlags)
+                            rt_bits = int(rd.TextureCategory.ColorTarget) | int(rd.TextureCategory.DepthTarget)
+                            is_rt = bool(flags & rt_bits)
+                        except Exception:
+                            is_rt = False
                         break
 
                 if tex_rid is None:
                     result["error"] = "Texture not found: %s" % resource_id
                     return
+
+                # Determine whether to flip
+                do_flip = opts["flip_y"]
+                if do_flip is None:
+                    do_flip = self._detect_need_flip_y(
+                        controller, api, is_rt)
 
                 texsave = rd.TextureSave()
                 texsave.resourceId = tex_rid
@@ -96,6 +126,17 @@ class ExportService(object):
                     result["error"] = "SaveTexture did not produce output file"
                     return
 
+                # Flip the saved PNG if needed
+                if do_flip:
+                    ok = self._flip_png_vertical(output_path)
+                    if not ok:
+                        print("[ExportTexture] WARNING: PNG flip failed for %s"
+                              % output_path)
+                        do_flip = False
+
+                print("[ExportTexture] eid=%d, api=%s, is_rt=%s, flip_y=%s"
+                      % (event_id, str(api), is_rt, do_flip))
+
                 file_size = os.path.getsize(output_path)
                 result["data"] = {
                     "url": self._build_url(filename),
@@ -107,6 +148,9 @@ class ExportService(object):
                     "mip": mip,
                     "slice": slice_index,
                     "format": "png",
+                    "api": str(api),
+                    "is_render_target": is_rt,
+                    "flip_y": do_flip,
                 }
             except Exception as e:
                 import traceback
@@ -117,6 +161,178 @@ class ExportService(object):
         if result["error"]:
             raise ValueError(result["error"])
         return result["data"]
+
+    @staticmethod
+    def _detect_need_flip_y(controller, api, is_render_target):
+        """Auto-detect whether a texture needs vertical flipping.
+
+        Only render targets may need flipping; regular textures are stored
+        top-to-bottom in GPU memory for all modern APIs.
+        """
+        if not is_render_target:
+            return False
+
+        if api == rd.GraphicsAPI.OpenGL:
+            return True
+
+        if api == rd.GraphicsAPI.Vulkan:
+            try:
+                pipe = controller.GetPipelineState()
+                vps = pipe.GetViewportScissor()
+                if vps and vps.viewports:
+                    if vps.viewports[0].height < 0:
+                        return True
+            except Exception:
+                pass
+
+        return False
+
+    # -------------------- PNG vertical flip --------------------
+
+    @staticmethod
+    def _flip_png_vertical(filepath):
+        """Flip a PNG image vertically in-place.
+
+        Pure-Python implementation using only stdlib (struct + zlib).
+        Returns True on success, False if the file could not be flipped.
+        """
+        with open(filepath, "rb") as f:
+            data = f.read()
+
+        if data[:8] != b'\x89PNG\r\n\x1a\n':
+            return False
+
+        # Parse all chunks
+        chunks = []
+        pos = 8
+        while pos + 8 <= len(data):
+            length = struct.unpack('>I', data[pos:pos + 4])[0]
+            ctype = data[pos + 4:pos + 8]
+            if pos + 12 + length > len(data):
+                break
+            cdata = data[pos + 8:pos + 8 + length]
+            chunks.append((ctype, cdata))
+            pos += 12 + length
+
+        # Extract IHDR
+        ihdr = None
+        for ctype, cdata in chunks:
+            if ctype == b'IHDR':
+                ihdr = cdata
+                break
+        if ihdr is None or len(ihdr) < 13:
+            return False
+
+        width, height = struct.unpack('>II', ihdr[:8])
+        bit_depth = ihdr[8]
+        color_type = ihdr[9]
+        interlace = ihdr[12]
+
+        if interlace != 0 or height == 0:
+            return False
+
+        ch_map = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+        channels = ch_map.get(color_type)
+        if channels is None:
+            return False
+
+        bpp = max(1, channels * bit_depth // 8)
+        if color_type == 3:
+            row_bytes = (width * bit_depth + 7) // 8
+        else:
+            row_bytes = width * channels * bit_depth // 8
+        scanline_len = 1 + row_bytes
+
+        # Decompress IDAT
+        idat_data = b''.join(cd for ct, cd in chunks if ct == b'IDAT')
+        if not idat_data:
+            return False
+
+        try:
+            raw = zlib.decompress(idat_data)
+        except zlib.error:
+            return False
+
+        if len(raw) != height * scanline_len:
+            return False
+
+        # Split into scanlines and decode filters
+        prev = bytearray(row_bytes)
+        decoded_rows = []
+        for y in range(height):
+            off = y * scanline_len
+            ft = raw[off]
+            row_raw = bytearray(raw[off + 1:off + scanline_len])
+            row = ExportService._png_unfilter(ft, row_raw, prev, bpp)
+            decoded_rows.append(row)
+            prev = row
+
+        # Reverse row order
+        decoded_rows.reverse()
+
+        # Re-encode with filter type 0 (None)
+        parts = []
+        for row in decoded_rows:
+            parts.append(b'\x00')
+            parts.append(bytes(row))
+        new_raw = b''.join(parts)
+
+        new_idat = zlib.compress(new_raw)
+
+        def _make_chunk(ct, cd):
+            body = ct + cd
+            crc = struct.pack('>I', zlib.crc32(body) & 0xFFFFFFFF)
+            return struct.pack('>I', len(cd)) + body + crc
+
+        # Rebuild PNG
+        out_parts = [b'\x89PNG\r\n\x1a\n']
+        idat_written = False
+        for ct, cd in chunks:
+            if ct == b'IDAT':
+                if not idat_written:
+                    out_parts.append(_make_chunk(b'IDAT', new_idat))
+                    idat_written = True
+                continue
+            if ct == b'IEND':
+                continue
+            out_parts.append(_make_chunk(ct, cd))
+        out_parts.append(_make_chunk(b'IEND', b''))
+
+        with open(filepath, "wb") as f:
+            f.write(b''.join(out_parts))
+
+        return True
+
+    @staticmethod
+    def _png_unfilter(filter_type, row, prev_row, bpp):
+        """Decode one PNG filter row. Modifies *row* in-place and returns it."""
+        if filter_type == 0:
+            pass
+        elif filter_type == 1:  # Sub
+            for i in range(bpp, len(row)):
+                row[i] = (row[i] + row[i - bpp]) & 0xFF
+        elif filter_type == 2:  # Up
+            for i in range(len(row)):
+                row[i] = (row[i] + prev_row[i]) & 0xFF
+        elif filter_type == 3:  # Average
+            for i in range(len(row)):
+                a = row[i - bpp] if i >= bpp else 0
+                row[i] = (row[i] + (a + prev_row[i]) // 2) & 0xFF
+        elif filter_type == 4:  # Paeth
+            for i in range(len(row)):
+                a = row[i - bpp] if i >= bpp else 0
+                b = prev_row[i]
+                c = prev_row[i - bpp] if i >= bpp else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                if pa <= pb and pa <= pc:
+                    pr = a
+                elif pb <= pc:
+                    pr = b
+                else:
+                    pr = c
+                row[i] = (row[i] + pr) & 0xFF
+        return row
 
     # ======================== Shader Export ========================
 

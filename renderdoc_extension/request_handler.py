@@ -222,7 +222,9 @@ class RequestHandler:
             raise ValueError("event_id is required")
         mip = params.get("mip", 0)
         slice_index = params.get("slice", 0)
-        return self.facade.export_texture(resource_id, int(event_id), mip, slice_index)
+        flip_y = params.get("flip_y")
+        return self.facade.export_texture(resource_id, int(event_id), mip,
+                                          slice_index, flip_y=flip_y)
 
     def _handle_export_mesh(self, params):
         """Handle export_mesh request"""
