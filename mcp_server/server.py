@@ -244,8 +244,6 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "event_id": {"type": "integer", "description": "The event ID of the draw call whose mesh to export"},
-                "flip_uv_v": {"type": "boolean", "description": "Override UV V-coordinate flip. Default: auto-detect based on graphics API"},
-                "flip_handedness": {"type": "boolean", "description": "Override coordinate system handedness conversion. Default: auto-detect based on graphics API"},
             },
             "required": ["event_id"],
         },
