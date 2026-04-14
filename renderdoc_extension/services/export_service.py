@@ -168,24 +168,17 @@ class ExportService(object):
 
         Only render targets may need flipping; regular textures are stored
         top-to-bottom in GPU memory for all modern APIs.
+
+        Render targets are flipped for all APIs by default. This handles both
+        native OpenGL (bottom-up framebuffer layout) and ANGLE-translated
+        Vulkan captures (OpenGL ES -> Vulkan, which preserves GL's bottom-up
+        layout). Users can override via the explicit flip_y parameter if the
+        default is wrong for their specific capture.
         """
         if not is_render_target:
             return False
 
-        if api == rd.GraphicsAPI.OpenGL:
-            return True
-
-        if api == rd.GraphicsAPI.Vulkan:
-            try:
-                pipe = controller.GetPipelineState()
-                vps = pipe.GetViewportScissor()
-                if vps and vps.viewports:
-                    if vps.viewports[0].height < 0:
-                        return True
-            except Exception:
-                pass
-
-        return False
+        return True
 
     # -------------------- PNG vertical flip --------------------
 
