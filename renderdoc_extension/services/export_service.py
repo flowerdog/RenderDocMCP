@@ -16,6 +16,77 @@ from ..utils import Parsers
 from .. import spirv_cross
 
 
+# ======================================================================
+# Source-engine coordinate / UV conventions for mesh export (OBJ target).
+#
+# A capture's graphics API (OpenGL / Vulkan / D3D) does NOT uniquely
+# determine object-space handedness or UV orientation of the vertex
+# data -- the source ENGINE does. Examples:
+#   - Unity always outputs LH object space + V-up UVs, no matter whether
+#     the backend is GL ES, Vulkan, or D3D. Android emulators (MuMu /
+#     LDPlayer / NoxPlayer) using ANGLE to translate GL ES to Vulkan
+#     produce "Vulkan" captures whose vertex data still follows Unity's
+#     conventions (and also strip all identifiers, making post-hoc
+#     detection harder).
+#   - Unreal uses LH + V-down.
+#   - Native GL engines typically use RH + V-up (OpenGL convention).
+#   - Native D3D / native Vulkan engines typically use LH + V-down.
+#
+# Fields:
+#   flip_hand : negate X + reverse winding, converting LH object space
+#               into OBJ's right-handed format. Unity's OBJ importer
+#               negates X on its side, so flip_hand=True round-trips
+#               cleanly into Unity.
+#   flip_uv_v : V -> 1 - V, converting top-left-origin UVs (D3D / Vulkan
+#               native / Unreal) into OBJ's bottom-left-origin
+#               convention (also what Unity uses at runtime).
+# ======================================================================
+_ENGINE_CONVENTIONS = {
+    "unity":         {"flip_hand": True,  "flip_uv_v": False},
+    "unreal":        {"flip_hand": True,  "flip_uv_v": True},
+    "native_gl":     {"flip_hand": False, "flip_uv_v": False},
+    "native_d3d":    {"flip_hand": True,  "flip_uv_v": True},
+    "native_vulkan": {"flip_hand": True,  "flip_uv_v": True},
+}
+_VALID_ENGINES = tuple(_ENGINE_CONVENTIONS.keys())
+
+# High-confidence substrings that identify Unity in shader reflection
+# or loaded module lists. Case-sensitive match (Unity's internal names
+# are mixed-case; lowercasing would create false positives on common
+# words like "unity").
+_UNITY_MODULE_MARKERS = (
+    "libunity.so", "UnityPlayer.dll", "UnityPlayer.dylib",
+    "libmain.so",  # Android Unity activity wrapper
+)
+_UNITY_SHADER_MARKERS = (
+    # Global / built-in constant block names
+    "UnityPerDraw", "UnityPerCamera", "UnityPerFrame", "UnityPerMaterial",
+    "UnityShadows", "UnityLighting", "UnityInstancing",
+    "UnityStereoGlobals", "UnityShaderVariables", "UnityPerDrawSprite",
+    # Built-in variable names (survive more toolchain passes than block
+    # names because they're referenced directly in shader bodies)
+    "unity_ObjectToWorld", "unity_WorldToObject",
+    "unity_MatrixVP", "unity_MatrixV", "unity_MatrixP", "unity_MatrixInvV",
+    "unity_CameraProjection", "unity_WorldTransformParams",
+    "_WorldSpaceCameraPos", "_WorldSpaceLightPos0",
+    "_MainLightPosition", "_MainLightColor",
+    # Texture / sampler names (URP + Built-in RP)
+    "_CameraDepthTexture", "_CameraOpaqueTexture",
+    "_CameraColorTexture", "_MainLightShadowmapTexture",
+)
+_UNREAL_MODULE_MARKERS = (
+    "libUE4.so", "libUnreal.so", "libUE5.so",
+    "UE4Game-", "UE5Game-", "UnrealEngine",
+)
+_UNREAL_SHADER_MARKERS = (
+    "View_WorldToClip", "View_ClipToWorld",
+    "View_TranslatedWorldToClip", "View_WorldCameraOrigin",
+    "Primitive_LocalToWorld", "Primitive_WorldToLocal",
+    "ResolvedView", "FViewUniformShaderParameters",
+    "View_PreViewTranslation", "View_ViewRectMin",
+)
+
+
 class ExportService(object):
     """Handles texture, shader and mesh export to files."""
 
@@ -50,6 +121,185 @@ class ExportService(object):
         except Exception:
             pass
         return "capture"
+
+    # ======================== Engine Detection ========================
+
+    @staticmethod
+    def _first_match(haystack, needles):
+        """Return the first needle found in haystack, or None."""
+        for n in needles:
+            if n in haystack:
+                return n
+        return None
+
+    def _collect_module_names(self, controller):
+        """Extract loaded module / executable name strings from the
+        structured file chunk metadata. Returns a single joined string
+        for substring matching, plus the raw list for diagnostics.
+        """
+        names = []
+        try:
+            sdfile = controller.GetStructuredFile()
+            # Chunks live in sdfile.chunks (SDChunk objects). The first
+            # chunks typically include driver init / image load metadata.
+            # We stringify each chunk's top-level scalar strings so that
+            # we can do substring matching without depending on exact
+            # chunk field layouts (which vary across APIs).
+            chunks = getattr(sdfile, "chunks", None) or []
+            # Cap the scan for perf -- module names always appear early.
+            scan_limit = 64
+            for i, chunk in enumerate(chunks):
+                if i >= scan_limit:
+                    break
+                try:
+                    s = str(chunk)
+                except Exception:
+                    continue
+                names.append(s)
+        except Exception:
+            pass
+        joined = "\n".join(names)
+        # Also include the capture filename as a weak hint.
+        try:
+            cap_path = self.ctx.GetCaptureFilename()
+            if cap_path:
+                joined = joined + "\n" + cap_path
+        except Exception:
+            pass
+        return joined
+
+    @staticmethod
+    def _collect_reflection_tokens(reflection):
+        """Gather a single joined string of all identifier-like fields
+        from a ShaderReflection for substring matching.
+        """
+        parts = []
+        if reflection is None:
+            return ""
+        try:
+            parts.append(str(getattr(reflection, "entryPoint", "") or ""))
+        except Exception:
+            pass
+        try:
+            for cb in (getattr(reflection, "constantBlocks", None) or []):
+                parts.append(str(getattr(cb, "name", "") or ""))
+                for v in (getattr(cb, "variables", None) or []):
+                    parts.append(str(getattr(v, "name", "") or ""))
+                    vtype = getattr(v, "type", None)
+                    if vtype is not None:
+                        for m in (getattr(vtype, "members", None) or []):
+                            parts.append(str(getattr(m, "name", "") or ""))
+        except Exception:
+            pass
+        try:
+            for attr in ("readOnlyResources", "readWriteResources", "samplers"):
+                lst = getattr(reflection, attr, None) or []
+                for res in lst:
+                    parts.append(str(getattr(res, "name", "") or ""))
+        except Exception:
+            pass
+        return " ".join(parts)
+
+    @staticmethod
+    def _extract_spirv_generator(reflection):
+        """Try to extract the SPIR-V Generator magic string from raw
+        bytes, if the reflection is SPIR-V. Purely informational.
+        """
+        try:
+            if getattr(reflection, "encoding", None) != rd.ShaderEncoding.SPIRV:
+                return None
+            raw = getattr(reflection, "rawBytes", None)
+            if not raw:
+                return None
+            # SPIR-V module header is 5 uint32 little-endian:
+            # magic, version, generator_magic, bound, schema.
+            # We can't map generator_magic to a human string here, but
+            # the OpSource / OpSourceExtension / OpString instructions
+            # in the module often contain the generator name. Simple
+            # heuristic: look for known substrings in the raw bytes.
+            data = bytes(raw)
+            known = (
+                "ANGLE Shader Compiler",
+                "Google Shaderc",
+                "Microsoft (R) HLSL",
+                "glslang",
+                "SPIR-V Tools",
+                "spirv-cross",
+            )
+            for marker in known:
+                if marker.encode("utf-8", errors="ignore") in data:
+                    return marker
+        except Exception:
+            pass
+        return None
+
+    def _detect_engine(self, controller, event_id):
+        """Layered engine detection. Returns (engine_or_None, info_dict).
+
+        Only returns a non-None engine when detection is high-confidence:
+          - Layer 1: module / capture-metadata substring hit
+          - Layer 2: shader reflection identifier substring hit
+        Layer 3 (SPIR-V generator) is surfaced in info but never used
+        as the sole basis for classification.
+        """
+        info = {
+            "api": None,
+            "capture_filename": None,
+            "shader_generator": None,
+            "module_markers_found": [],
+            "reflection_markers_found": [],
+            "stages_scanned": [],
+        }
+        try:
+            info["api"] = str(controller.GetAPIProperties().pipelineType)
+        except Exception:
+            pass
+        try:
+            info["capture_filename"] = self.ctx.GetCaptureFilename() or None
+        except Exception:
+            pass
+
+        # ---- Layer 1: capture-metadata / module names ----
+        module_text = self._collect_module_names(controller)
+        hit = self._first_match(module_text, _UNITY_MODULE_MARKERS)
+        if hit:
+            info["module_markers_found"].append(hit)
+            return "unity", info
+        hit = self._first_match(module_text, _UNREAL_MODULE_MARKERS)
+        if hit:
+            info["module_markers_found"].append(hit)
+            return "unreal", info
+
+        # ---- Layer 2: shader reflection identifiers ----
+        # Check both vertex and pixel stages at the exported event.
+        try:
+            pipe = controller.GetPipelineState()
+            for stage in (rd.ShaderStage.Vertex, rd.ShaderStage.Pixel):
+                try:
+                    refl = pipe.GetShaderReflection(stage)
+                except Exception:
+                    refl = None
+                if refl is None:
+                    continue
+                info["stages_scanned"].append(str(stage))
+                # Capture generator (informational)
+                if info["shader_generator"] is None:
+                    gen = self._extract_spirv_generator(refl)
+                    if gen:
+                        info["shader_generator"] = gen
+                tokens = self._collect_reflection_tokens(refl)
+                hit = self._first_match(tokens, _UNITY_SHADER_MARKERS)
+                if hit:
+                    info["reflection_markers_found"].append(hit)
+                    return "unity", info
+                hit = self._first_match(tokens, _UNREAL_SHADER_MARKERS)
+                if hit:
+                    info["reflection_markers_found"].append(hit)
+                    return "unreal", info
+        except Exception:
+            pass
+
+        return None, info
 
     # ======================== Texture Export ========================
 
@@ -541,17 +791,25 @@ class ExportService(object):
 
     # ======================== Mesh Export ========================
 
-    def export_mesh(self, event_id, flip_uv_v=None, flip_handedness=None):
+    def export_mesh(self, event_id, flip_uv_v=None, flip_handedness=None,
+                    source_engine=None):
         """Export mesh at a draw call to OBJ file and return download URL.
 
         Args:
             event_id: The event ID of the draw call.
-            flip_uv_v: Flip V texcoord (1-v) for OBJ convention.
-                None = auto-detect from graphics API (flip for Vulkan/D3D, keep for OpenGL).
-                True = always flip. False = never flip.
-            flip_handedness: Convert left-hand to right-hand for OBJ (negate X + reverse winding).
-                None = auto-detect from graphics API (flip for Vulkan/D3D, keep for OpenGL).
-                True = always flip. False = never flip.
+            flip_uv_v: Force V-flip (1-v). None = derived from source_engine
+                or auto-detection. True/False = override.
+            flip_handedness: Force X-negation + winding reversal. None =
+                derived from source_engine or auto-detection.
+                True/False = override.
+            source_engine: One of "unity", "unreal", "native_gl",
+                "native_d3d", "native_vulkan", "auto", or None (same as
+                "auto"). When "auto" or None, runs high-confidence
+                engine detection. If detection fails, the call returns
+                an error (not a silent API-based guess) asking the caller
+                to retry with an explicit source_engine. Explicit
+                flip_uv_v / flip_handedness always win over
+                source_engine.
         """
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
@@ -562,24 +820,83 @@ class ExportService(object):
         filename = "%s_mesh_eid%d.obj" % (tag, event_id)
         output_path = os.path.join(self.export_dir, filename)
 
+        # Validate source_engine up front so we don't pay the BlockInvoke
+        # cost for a clearly bad request.
+        if source_engine is not None and source_engine != "auto" \
+                and source_engine not in _ENGINE_CONVENTIONS:
+            return {
+                "error": "invalid_source_engine",
+                "message": ("source_engine must be one of %s, 'auto', or omitted"
+                            % (list(_VALID_ENGINES),)),
+                "valid_values": list(_VALID_ENGINES) + ["auto"],
+            }
+
         result = {"data": None, "error": None}
-        opts = {"flip_uv_v": flip_uv_v, "flip_hand": flip_handedness}
+        opts = {
+            "flip_uv_v": flip_uv_v,
+            "flip_hand": flip_handedness,
+            "source_engine": source_engine,
+        }
 
         def callback(controller):
             try:
                 controller.SetFrameEvent(event_id, True)
 
-                # Auto-detect coordinate conventions from graphics API
                 api = controller.GetAPIProperties().pipelineType
-                is_opengl = (api == rd.GraphicsAPI.OpenGL)
 
                 do_flip_uv = opts["flip_uv_v"]
-                if do_flip_uv is None:
-                    do_flip_uv = not is_opengl
-
                 do_flip_hand = opts["flip_hand"]
-                if do_flip_hand is None:
-                    do_flip_hand = not is_opengl
+                engine_hint = opts["source_engine"]
+                detected_engine = None
+                detection_info = None
+                engine_source = None  # "explicit" | "detected" | "explicit-flags"
+
+                # 1) If user passed BOTH explicit flip params, honour them
+                #    without running detection (preserves old behaviour).
+                if do_flip_uv is not None and do_flip_hand is not None:
+                    engine_source = "explicit-flags"
+                else:
+                    # 2) Resolve engine: explicit source_engine wins;
+                    #    otherwise run high-confidence auto-detection.
+                    if engine_hint and engine_hint != "auto":
+                        detected_engine = engine_hint
+                        engine_source = "explicit"
+                    else:
+                        detected_engine, detection_info = \
+                            self._detect_engine(controller, event_id)
+                        engine_source = "detected"
+
+                        if detected_engine is None:
+                            # Detection failed -- surface a rich error so
+                            # the caller (or the human behind it) can pick
+                            # a source_engine explicitly.
+                            info = detection_info or {}
+                            info["event_id"] = event_id
+                            info["note"] = (
+                                "Tip: Android emulator captures via ANGLE "
+                                "(MuMu / LDPlayer / NoxPlayer) typically strip "
+                                "all Unity identifiers. If the capture is of "
+                                "a Unity game, retry with source_engine='unity'."
+                            )
+                            result["error"] = "engine_detection_failed"
+                            result["error_data"] = {
+                                "message": ("Could not detect source engine "
+                                            "from capture metadata or shader "
+                                            "reflection. Retry with explicit "
+                                            "source_engine."),
+                                "valid_values": list(_VALID_ENGINES),
+                                "detection_info": info,
+                            }
+                            return
+
+                    # Apply conventions, but only for fields the caller
+                    # didn't pin. Explicit flip_uv_v / flip_handedness
+                    # always win over the engine-derived defaults.
+                    conv = _ENGINE_CONVENTIONS[detected_engine]
+                    if do_flip_uv is None:
+                        do_flip_uv = conv["flip_uv_v"]
+                    if do_flip_hand is None:
+                        do_flip_hand = conv["flip_hand"]
 
                 draw = self.ctx.GetAction(event_id)
                 if draw is None:
@@ -595,8 +912,11 @@ class ExportService(object):
                     result["error"] = "No vertex inputs at event_id %d" % event_id
                     return
 
-                print("[ExportMesh] eid=%d, api=%s, flip_uv=%s, flip_hand=%s, %d vertex attrs: %s"
-                      % (event_id, str(api), do_flip_uv, do_flip_hand, len(attrs),
+                print(("[ExportMesh] eid=%d, api=%s, engine=%s(%s), "
+                       "flip_uv=%s, flip_hand=%s, %d vertex attrs: %s")
+                      % (event_id, str(api),
+                         detected_engine, engine_source,
+                         do_flip_uv, do_flip_hand, len(attrs),
                          [(a.name, "inst" if a.perInstance else "vert",
                            str(a.format.compType), a.format.compCount,
                            a.format.compByteWidth)
@@ -737,15 +1057,26 @@ class ExportService(object):
                     "api": str(api),
                     "flip_uv_v": do_flip_uv,
                     "flip_handedness": do_flip_hand,
+                    "source_engine": detected_engine,
+                    "source_engine_source": engine_source,
                     "format": "obj",
                 }
+                if detection_info is not None:
+                    result["data"]["detection_info"] = detection_info
             except Exception as e:
                 import traceback
                 result["error"] = "Mesh export failed: %s\n%s" % (str(e), traceback.format_exc())
 
         self._invoke(callback)
 
+        # Structured error (e.g. engine_detection_failed) bubbles up as a
+        # dict so the MCP layer can relay full detail to the caller. Free-
+        # form strings are raised as ValueError like before.
         if result["error"]:
+            if result.get("error_data") is not None:
+                payload = {"error": result["error"]}
+                payload.update(result["error_data"])
+                return payload
             raise ValueError(result["error"])
         return result["data"]
 
