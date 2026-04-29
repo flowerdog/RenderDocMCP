@@ -117,9 +117,11 @@ class RenderDocFacade:
         """Find all draw calls using a texture with the given name (partial match)"""
         return self._search.find_draws_by_texture(texture_name)
 
-    def find_draws_by_resource(self, resource_id):
-        """Find all draw calls using a specific resource ID (exact match)"""
-        return self._search.find_draws_by_resource(resource_id)
+    def find_draws_by_resource(self, resource_id, usage_filter=None):
+        """Find all events using a specific resource ID (exact match)"""
+        return self._search.find_draws_by_resource(
+            resource_id, usage_filter=usage_filter
+        )
 
     # ==================== Resource Operations ====================
 
@@ -178,9 +180,11 @@ class RenderDocFacade:
             raise ValueError("Export service not configured")
         return self._export.export_shader(event_id, stage, disassembly_target)
 
-    def export_mesh(self, event_id, flip_uv_v=None, flip_handedness=None):
+    def export_mesh(self, event_id, flip_uv_v=None, flip_handedness=None,
+                    source_engine=None):
         """Export mesh to OBJ and return download URL"""
         if self._export is None:
             raise ValueError("Export service not configured")
         return self._export.export_mesh(event_id, flip_uv_v=flip_uv_v,
-                                        flip_handedness=flip_handedness)
+                                        flip_handedness=flip_handedness,
+                                        source_engine=source_engine)

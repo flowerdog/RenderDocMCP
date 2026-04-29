@@ -110,7 +110,10 @@ class RequestHandler:
         resource_id = params.get("resource_id")
         if resource_id is None:
             raise ValueError("resource_id is required")
-        return self.facade.find_draws_by_resource(resource_id)
+        usage_filter = params.get("usage_filter")
+        return self.facade.find_draws_by_resource(
+            resource_id, usage_filter=usage_filter
+        )
 
     def _handle_get_draw_call_details(self, params):
         """Handle get_draw_call_details request"""
@@ -233,8 +236,10 @@ class RequestHandler:
             raise ValueError("event_id is required")
         flip_uv_v = params.get("flip_uv_v")
         flip_handedness = params.get("flip_handedness")
+        source_engine = params.get("source_engine")
         return self.facade.export_mesh(int(event_id), flip_uv_v=flip_uv_v,
-                                       flip_handedness=flip_handedness)
+                                       flip_handedness=flip_handedness,
+                                       source_engine=source_engine)
 
     def _handle_export_shader(self, params):
         """Handle export_shader request"""

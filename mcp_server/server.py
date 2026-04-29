@@ -78,11 +78,22 @@ TOOLS = [
     ),
     Tool(
         name="find_draws_by_resource",
-        description='Find all draw calls using a specific resource ID (exact match). Returns a list of matching draw calls with event IDs and match reasons. Searches shaders, SRVs, UAVs, render targets, and depth targets.',
+        description=(
+            "Find all events using a specific resource ID (exact match), via "
+            "RenderDoc's capture-wide GetUsage query. Each match reports the "
+            "ResourceUsage type (e.g. ColorTarget, PS_Resource, CopyDst, GenMips) "
+            "and is classified as 'read' or 'write'. Optionally filter by "
+            "access type via usage_filter."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
                 "resource_id": {"type": "string", "description": 'Resource ID to search for (e.g. "ResourceId::12345" or "12345")'},
+                "usage_filter": {
+                    "type": "string",
+                    "enum": ["read", "write", "any"],
+                    "description": "Filter matches by access type. 'read', 'write', or 'any' (default).",
+                },
             },
             "required": ["resource_id"],
         },
@@ -172,8 +183,15 @@ TOOLS = [
     Tool(
         name="get_pipeline_state",
         description=(
-            "Get the full graphics pipeline state at a specific event. Returns detailed pipeline state including: "
-            "bound shaders, shader resources (SRVs), UAVs, samplers, constant buffers, render targets, depth target, viewports, and input assembly state."
+            "Get the full graphics pipeline state at a specific event. Returns: "
+            "bound shaders (SRVs/UAVs/samplers/cbuffers per stage), render_targets "
+            "(with format/dimensions), depth_target, viewports/scissors, "
+            "input_assembly (topology + index/vertex buffers + vertex_inputs with "
+            "format/offset), color_blends, stencil_front/stencil_back, "
+            "rasterizer (cull_mode/front_ccw/fill_mode/depth_bias/...), "
+            "depth_stencil (depth_test_enable/depth_write_enable/depth_function/...), "
+            "blend_state (blend_factor/alpha_to_coverage/...). "
+            "Rasterizer/depth_stencil/blend_state shapes are API-specific."
         ),
         inputSchema={
             "type": "object",
@@ -237,13 +255,43 @@ TOOLS = [
         name="export_mesh",
         description=(
             "Export the mesh geometry at a draw call to OBJ file and return a download URL. "
-            "Extracts vertex positions, normals, and texture coordinates. "
-            "Coordinate system and UV conventions are automatically matched to the OBJ format."
+            "Extracts vertex positions, normals, and texture coordinates.\n\n"
+            "Coordinate-system / UV conventions are chosen per SOURCE ENGINE, not per graphics API. "
+            "(Unity on Vulkan and Unity on GL ES both produce LH+V-up vertex data; a native Vulkan engine "
+            "produces LH+V-down. API type alone cannot distinguish them -- especially for Android emulator "
+            "captures via ANGLE, which strip all identifier names.) Convention table:\n"
+            "  unity         -> flip_handedness=True,  flip_uv_v=False  (LH obj-space, V-up UV)\n"
+            "  unreal        -> flip_handedness=True,  flip_uv_v=True   (LH obj-space, V-down UV)\n"
+            "  native_gl     -> flip_handedness=False, flip_uv_v=False  (RH obj-space, V-up UV)\n"
+            "  native_d3d    -> flip_handedness=True,  flip_uv_v=True\n"
+            "  native_vulkan -> flip_handedness=True,  flip_uv_v=True\n\n"
+            "When source_engine is omitted or 'auto', the tool runs HIGH-CONFIDENCE detection by scanning "
+            "(1) loaded module names in the capture metadata and (2) shader reflection identifiers. "
+            "If detection fails (common for Android emulator / ANGLE captures), the tool returns a "
+            "structured error asking the caller to retry with an explicit source_engine value. "
+            "Pass flip_uv_v / flip_handedness directly only to override the engine-derived defaults."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "event_id": {"type": "integer", "description": "The event ID of the draw call whose mesh to export"},
+                "source_engine": {
+                    "type": "string",
+                    "enum": ["unity", "unreal", "native_gl", "native_d3d", "native_vulkan", "auto"],
+                    "description": (
+                        "Source engine whose conventions to use. 'auto' (default if omitted) runs "
+                        "high-confidence auto-detection; fails with a structured error if unsure. "
+                        "Hint: Android emulator captures of mobile games are almost always Unity."
+                    ),
+                },
+                "flip_uv_v": {
+                    "type": "boolean",
+                    "description": "Override V-flip. When set, wins over source_engine's default.",
+                },
+                "flip_handedness": {
+                    "type": "boolean",
+                    "description": "Override X-negation + winding reversal. When set, wins over source_engine's default.",
+                },
             },
             "required": ["event_id"],
         },

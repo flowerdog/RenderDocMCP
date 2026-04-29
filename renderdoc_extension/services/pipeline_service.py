@@ -240,48 +240,23 @@ class PipelineService:
 
             pipeline_info["shaders"] = stages
 
-            # Viewport and scissor
-            try:
-                vp_scissor = pipe.GetViewportScissor()
-                if vp_scissor:
-                    viewports = []
-                    for v in vp_scissor.viewports:
-                        viewports.append(
-                            {
-                                "x": v.x,
-                                "y": v.y,
-                                "width": v.width,
-                                "height": v.height,
-                                "min_depth": v.minDepth,
-                                "max_depth": v.maxDepth,
-                            }
-                        )
-                    pipeline_info["viewports"] = viewports
-            except Exception:
-                pass
+            # Viewports / scissors (API-specific; the abstract layer has no count)
+            self._fill_viewport_scissor(pipeline_info, controller, api)
 
-            # Render targets
-            try:
-                om = pipe.GetOutputMerger()
-                if om:
-                    rts = []
-                    for i, rt in enumerate(om.renderTargets):
-                        if rt.resourceId != rd.ResourceId.Null():
-                            rts.append({"index": i, "resource_id": str(rt.resourceId)})
-                    pipeline_info["render_targets"] = rts
+            # Render targets + depth target (with resource details)
+            self._fill_output_targets(
+                pipeline_info, pipe, resource_lookup
+            )
 
-                    if om.depthTarget.resourceId != rd.ResourceId.Null():
-                        pipeline_info["depth_target"] = str(om.depthTarget.resourceId)
-            except Exception:
-                pass
+            # Color blends + stencil faces (abstract layer)
+            self._fill_color_blends(pipeline_info, pipe)
+            self._fill_stencil_faces(pipeline_info, pipe)
 
-            # Input assembly
-            try:
-                ia = pipe.GetIAState()
-                if ia:
-                    pipeline_info["input_assembly"] = {"topology": str(ia.topology)}
-            except Exception:
-                pass
+            # Input assembly: topology + index buffer + vertex buffers + vertex inputs
+            self._fill_input_assembly(pipeline_info, pipe)
+
+            # API-specific: rasterizer, depth-stencil, blend constants
+            self._fill_api_specific_state(pipeline_info, controller, api)
 
             result["pipeline"] = pipeline_info
 
@@ -290,6 +265,392 @@ class PipelineService:
         if result["error"]:
             raise ValueError(result["error"])
         return result["pipeline"]
+
+    # ------------------------------------------------------------------ #
+    #  pipeline_state helpers                                             #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _serialize_viewport(v):
+        return {
+            "x": v.x,
+            "y": v.y,
+            "width": v.width,
+            "height": v.height,
+            "min_depth": v.minDepth,
+            "max_depth": v.maxDepth,
+        }
+
+    @staticmethod
+    def _serialize_scissor(s):
+        info = {"x": s.x, "y": s.y, "width": s.width, "height": s.height}
+        if hasattr(s, "enabled"):
+            info["enabled"] = bool(s.enabled)
+        return info
+
+    def _fill_viewport_scissor(self, pipeline_info, controller, api):
+        """Populate viewports/scissors via API-specific state (abstract layer
+        has no count accessor)."""
+        try:
+            vps, scs = self._get_viewports_scissors_api(controller, api)
+            pipeline_info["viewports"] = [self._serialize_viewport(v) for v in vps]
+            pipeline_info["scissors"] = [self._serialize_scissor(s) for s in scs]
+        except Exception as e:
+            pipeline_info["viewport_error"] = str(e)
+
+    @staticmethod
+    def _get_viewports_scissors_api(controller, api):
+        """Return (viewports_list, scissors_list) from API-specific state."""
+        if api == rd.GraphicsAPI.Vulkan:
+            vk = controller.GetVulkanPipelineState()
+            if vk is None:
+                return [], []
+            vps = []
+            scs = []
+            for vs in vk.viewportScissor.viewportScissors:
+                vps.append(vs.vp)
+                scs.append(vs.scissor)
+            return vps, scs
+        if api == rd.GraphicsAPI.D3D11:
+            d = controller.GetD3D11PipelineState()
+            return (list(d.rasterizer.viewports), list(d.rasterizer.scissors)) \
+                if d else ([], [])
+        if api == rd.GraphicsAPI.D3D12:
+            d = controller.GetD3D12PipelineState()
+            return (list(d.rasterizer.viewports), list(d.rasterizer.scissors)) \
+                if d else ([], [])
+        if api == rd.GraphicsAPI.OpenGL:
+            g = controller.GetGLPipelineState()
+            return (list(g.rasterizer.viewports), list(g.rasterizer.scissors)) \
+                if g else ([], [])
+        return [], []
+
+    def _fill_output_targets(self, pipeline_info, pipe, resource_lookup):
+        try:
+            outputs = pipe.GetOutputTargets()
+            rts = []
+            for i, desc in enumerate(outputs):
+                if desc.resource == rd.ResourceId.Null():
+                    continue
+                rt = {"index": i, "resource_id": str(desc.resource)}
+                rt.update(self._get_resource_details(desc.resource, resource_lookup))
+                rts.append(rt)
+            pipeline_info["render_targets"] = rts
+
+            depth = pipe.GetDepthTarget()
+            if depth.resource != rd.ResourceId.Null():
+                d = {"resource_id": str(depth.resource)}
+                d.update(self._get_resource_details(depth.resource, resource_lookup))
+                pipeline_info["depth_target"] = d
+        except Exception as e:
+            pipeline_info["output_targets_error"] = str(e)
+
+    @staticmethod
+    def _serialize_blend_eq(eq):
+        return {
+            "source": str(eq.source),
+            "destination": str(eq.destination),
+            "operation": str(eq.operation),
+        }
+
+    @classmethod
+    def _serialize_color_blend(cls, b):
+        return {
+            "enabled": bool(b.enabled),
+            "color_blend": cls._serialize_blend_eq(b.colorBlend),
+            "alpha_blend": cls._serialize_blend_eq(b.alphaBlend),
+            "logic_operation_enabled": bool(b.logicOperationEnabled),
+            "logic_operation": str(b.logicOperation),
+            "write_mask": int(b.writeMask),
+        }
+
+    def _fill_color_blends(self, pipeline_info, pipe):
+        try:
+            blends = pipe.GetColorBlends()
+            pipeline_info["color_blends"] = [
+                self._serialize_color_blend(b) for b in blends
+            ]
+        except Exception as e:
+            pipeline_info["color_blends_error"] = str(e)
+
+        try:
+            pipeline_info["independent_blending"] = bool(
+                pipe.IsIndependentBlendingEnabled()
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _serialize_stencil_face(f):
+        return {
+            "fail_op": str(f.failOperation),
+            "depth_fail_op": str(f.depthFailOperation),
+            "pass_op": str(f.passOperation),
+            "function": str(f.function),
+            "reference": int(f.reference),
+            "compare_mask": int(f.compareMask),
+            "write_mask": int(f.writeMask),
+        }
+
+    def _fill_stencil_faces(self, pipeline_info, pipe):
+        try:
+            # pyrenderdoc converts rdcpair -> PyTuple, so index access is correct.
+            faces = pipe.GetStencilFaces()
+            pipeline_info["stencil_front"] = self._serialize_stencil_face(faces[0])
+            pipeline_info["stencil_back"] = self._serialize_stencil_face(faces[1])
+        except Exception as e:
+            pipeline_info["stencil_error"] = str(e)
+
+    @staticmethod
+    def _serialize_bound_vbuffer(vb):
+        return {
+            "resource_id": str(vb.resourceId),
+            "byte_offset": int(vb.byteOffset),
+            "byte_stride": int(vb.byteStride),
+            "byte_size": int(vb.byteSize),
+        }
+
+    @staticmethod
+    def _serialize_vertex_input(a):
+        info = {
+            "name": a.name,
+            "vertex_buffer": int(a.vertexBuffer),
+            "byte_offset": int(a.byteOffset),
+            "per_instance": bool(a.perInstance),
+            "instance_rate": int(a.instanceRate),
+            "generic_enabled": bool(a.genericEnabled),
+        }
+        try:
+            info["used"] = bool(a.used)
+        except AttributeError:
+            pass
+        try:
+            fmt = a.format
+            info["format"] = {
+                "name": str(fmt.Name()),
+                "comp_type": str(fmt.compType),
+                "comp_count": int(fmt.compCount),
+                "comp_byte_width": int(fmt.compByteWidth),
+            }
+        except Exception:
+            pass
+        return info
+
+    def _fill_input_assembly(self, pipeline_info, pipe):
+        ia = {}
+        try:
+            ia["topology"] = str(pipe.GetPrimitiveTopology())
+        except Exception:
+            pass
+        try:
+            ia["restart_enabled"] = bool(pipe.IsRestartEnabled())
+            ia["restart_index"] = int(pipe.GetRestartIndex())
+        except Exception:
+            pass
+        try:
+            ib = pipe.GetIBuffer()
+            if ib.resourceId != rd.ResourceId.Null():
+                ia["index_buffer"] = self._serialize_bound_vbuffer(ib)
+        except Exception:
+            pass
+        try:
+            vbs = pipe.GetVBuffers()
+            ia["vertex_buffers"] = [
+                self._serialize_bound_vbuffer(vb)
+                for vb in vbs
+                if vb.resourceId != rd.ResourceId.Null()
+            ]
+        except Exception:
+            pass
+        try:
+            attrs = pipe.GetVertexInputs()
+            ia["vertex_inputs"] = [self._serialize_vertex_input(a) for a in attrs]
+        except Exception:
+            pass
+        if ia:
+            pipeline_info["input_assembly"] = ia
+
+    # ----- API-specific rasterizer / depth-stencil / blend extras ------ #
+
+    def _fill_api_specific_state(self, pipeline_info, controller, api):
+        try:
+            if api == rd.GraphicsAPI.Vulkan:
+                self._fill_vulkan_state(pipeline_info, controller)
+            elif api == rd.GraphicsAPI.D3D11:
+                self._fill_d3d11_state(pipeline_info, controller)
+            elif api == rd.GraphicsAPI.D3D12:
+                self._fill_d3d12_state(pipeline_info, controller)
+            elif api == rd.GraphicsAPI.OpenGL:
+                self._fill_gl_state(pipeline_info, controller)
+        except Exception as e:
+            pipeline_info["api_specific_error"] = str(e)
+
+    @staticmethod
+    def _safe_float_tuple4(arr):
+        try:
+            return [float(arr[0]), float(arr[1]), float(arr[2]), float(arr[3])]
+        except Exception:
+            return None
+
+    def _fill_vulkan_state(self, pipeline_info, controller):
+        vk = controller.GetVulkanPipelineState()
+        if vk is None:
+            return
+
+        r = vk.rasterizer
+        pipeline_info["rasterizer"] = {
+            "cull_mode": str(r.cullMode),
+            "front_ccw": bool(r.frontCCW),
+            "fill_mode": str(r.fillMode),
+            "depth_clamp_enable": bool(r.depthClampEnable),
+            "depth_clip_enable": bool(r.depthClipEnable),
+            "rasterizer_discard_enable": bool(r.rasterizerDiscardEnable),
+            "depth_bias_enable": bool(r.depthBiasEnable),
+            "depth_bias": float(r.depthBias),
+            "depth_bias_clamp": float(r.depthBiasClamp),
+            "slope_scaled_depth_bias": float(r.slopeScaledDepthBias),
+            "line_width": float(r.lineWidth),
+            "conservative_rasterization": str(r.conservativeRasterization),
+        }
+
+        ds = vk.depthStencil
+        pipeline_info["depth_stencil"] = {
+            "depth_test_enable": bool(ds.depthTestEnable),
+            "depth_write_enable": bool(ds.depthWriteEnable),
+            "depth_function": str(ds.depthFunction),
+            "depth_bounds_enable": bool(ds.depthBoundsEnable),
+            "stencil_test_enable": bool(ds.stencilTestEnable),
+        }
+
+        cb = vk.colorBlend
+        bs = {
+            "alpha_to_coverage_enable": bool(cb.alphaToCoverageEnable),
+            "alpha_to_one_enable": bool(cb.alphaToOneEnable),
+        }
+        bf = self._safe_float_tuple4(cb.blendFactor)
+        if bf is not None:
+            bs["blend_factor"] = bf
+        pipeline_info["blend_state"] = bs
+
+    def _fill_d3d11_state(self, pipeline_info, controller):
+        d = controller.GetD3D11PipelineState()
+        if d is None:
+            return
+
+        r = d.rasterizer.state
+        pipeline_info["rasterizer"] = {
+            "resource_id": str(r.resourceId),
+            "cull_mode": str(r.cullMode),
+            "front_ccw": bool(r.frontCCW),
+            "fill_mode": str(r.fillMode),
+            "depth_bias": int(r.depthBias),
+            "depth_bias_clamp": float(r.depthBiasClamp),
+            "slope_scaled_depth_bias": float(r.slopeScaledDepthBias),
+            "depth_clip": bool(r.depthClip),
+            "scissor_enable": bool(r.scissorEnable),
+            "multisample_enable": bool(r.multisampleEnable),
+            "antialiased_lines": bool(r.antialiasedLines),
+            "forced_sample_count": int(r.forcedSampleCount),
+            "conservative_rasterization": str(r.conservativeRasterization),
+        }
+
+        ds = d.outputMerger.depthStencilState
+        pipeline_info["depth_stencil"] = {
+            "resource_id": str(ds.resourceId),
+            "depth_test_enable": bool(ds.depthEnable),
+            "depth_write_enable": bool(ds.depthWrites),
+            "depth_function": str(ds.depthFunction),
+            "stencil_test_enable": bool(ds.stencilEnable),
+        }
+
+        bs_obj = d.outputMerger.blendState
+        bs = {
+            "resource_id": str(bs_obj.resourceId),
+            "alpha_to_coverage": bool(bs_obj.alphaToCoverage),
+            "independent_blend": bool(bs_obj.independentBlend),
+            "sample_mask": int(bs_obj.sampleMask),
+        }
+        bf = self._safe_float_tuple4(bs_obj.blendFactor)
+        if bf is not None:
+            bs["blend_factor"] = bf
+        pipeline_info["blend_state"] = bs
+
+    def _fill_d3d12_state(self, pipeline_info, controller):
+        d = controller.GetD3D12PipelineState()
+        if d is None:
+            return
+
+        r = d.rasterizer.state
+        pipeline_info["rasterizer"] = {
+            "cull_mode": str(r.cullMode),
+            "front_ccw": bool(r.frontCCW),
+            "fill_mode": str(r.fillMode),
+            "depth_bias": float(r.depthBias),
+            "depth_bias_clamp": float(r.depthBiasClamp),
+            "slope_scaled_depth_bias": float(r.slopeScaledDepthBias),
+            "depth_clip": bool(r.depthClip),
+            "forced_sample_count": int(r.forcedSampleCount),
+            "conservative_rasterization": str(r.conservativeRasterization),
+            "line_raster_mode": str(r.lineRasterMode),
+        }
+
+        ds = d.outputMerger.depthStencilState
+        pipeline_info["depth_stencil"] = {
+            "depth_test_enable": bool(ds.depthEnable),
+            "depth_write_enable": bool(ds.depthWrites),
+            "depth_function": str(ds.depthFunction),
+            "stencil_test_enable": bool(ds.stencilEnable),
+        }
+
+        bs_obj = d.outputMerger.blendState
+        bs = {
+            "alpha_to_coverage": bool(bs_obj.alphaToCoverage),
+            "independent_blend": bool(bs_obj.independentBlend),
+            "sample_mask": int(bs_obj.sampleMask),
+        }
+        bf = self._safe_float_tuple4(bs_obj.blendFactor)
+        if bf is not None:
+            bs["blend_factor"] = bf
+        pipeline_info["blend_state"] = bs
+
+    def _fill_gl_state(self, pipeline_info, controller):
+        g = controller.GetGLPipelineState()
+        if g is None:
+            return
+
+        r = g.rasterizer.state
+        pipeline_info["rasterizer"] = {
+            "cull_mode": str(r.cullMode),
+            "front_ccw": bool(r.frontCCW),
+            "fill_mode": str(r.fillMode),
+            "depth_bias": float(r.depthBias),
+            "slope_scaled_depth_bias": float(r.slopeScaledDepthBias),
+            "offset_clamp": float(r.offsetClamp),
+            "depth_clamp": bool(r.depthClamp),
+            "multisample_enable": bool(r.multisampleEnable),
+            "alpha_to_coverage": bool(r.alphaToCoverage),
+            "alpha_to_one": bool(r.alphaToOne),
+            "line_width": float(r.lineWidth),
+        }
+
+        # GL nests depth/stencil under depthState / stencilState (NOT flat).
+        ds = g.depthState
+        ss = g.stencilState
+        pipeline_info["depth_stencil"] = {
+            "depth_test_enable": bool(ds.depthEnable),
+            "depth_write_enable": bool(ds.depthWrites),
+            "depth_function": str(ds.depthFunction),
+            "depth_bounds_enable": bool(ds.depthBounds),
+            "stencil_test_enable": bool(ss.stencilEnable),
+        }
+
+        bs_obj = g.blendState
+        bs = {}
+        bf = self._safe_float_tuple4(bs_obj.blendFactor)
+        if bf is not None:
+            bs["blend_factor"] = bf
+        if bs:
+            pipeline_info["blend_state"] = bs
 
     def get_cbuffer_values(
         self,

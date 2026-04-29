@@ -53,14 +53,14 @@ RenderDocMCP/
 | `get_frame_summary` | 帧整体统计信息（Draw Call 数、Marker 列表等） |
 | `find_draws_by_shader` | 按 Shader 名称反向查找 Draw Call |
 | `find_draws_by_texture` | 按纹理名称反向查找 Draw Call |
-| `find_draws_by_resource` | 按资源 ID 反向查找 Draw Call |
+| `find_draws_by_resource` | 按资源 ID 反向查找事件（基于 GetUsage，支持 read/write 过滤） |
 | `get_draw_call_details` | 特定 Draw Call 的详细信息 |
 | `get_action_timings` | 获取 Action 的 GPU 执行时间 |
 | `get_shader_info` | Shader 源码 / 常量缓冲区（默认 GLSL，可选 SPIR-V / HLSL 等） |
 | `get_buffer_contents` | 获取缓冲区数据（支持偏移/长度指定） |
 | `get_texture_info` | 纹理元数据 |
 | `get_texture_data` | 纹理像素数据（⚠️ 仅限像素级识别/分析场景，见下方说明） |
-| `get_pipeline_state` | 完整管线状态 |
+| `get_pipeline_state` | 完整管线状态（rasterizer / depth_stencil / blend / vertex_input / RT format / viewport / scissor） |
 | `export_texture` | 导出纹理为 PNG 文件，返回下载 URL（不经过模型） |
 | `export_shader` | 导出 Shader 反汇编为 TXT 文件，返回下载 URL（默认 GLSL，可选格式） |
 | `export_mesh` | 导出 Draw Call 的 Mesh 为 OBJ 文件，返回下载 URL（自动坐标系/UV 转换） |
@@ -149,9 +149,20 @@ find_draws_by_shader(shader_name="Toon", stage="pixel")
 # 按纹理名称搜索（部分匹配）
 find_draws_by_texture(texture_name="CharacterSkin")
 
-# 按资源 ID 搜索（精确匹配）
+# 按资源 ID 搜索（精确匹配，基于 controller.GetUsage 一次性 capture-wide 查询）
 find_draws_by_resource(resource_id="ResourceId::12345")
+# → {"matches": [{"event_id": 224, "name": "...", "usage": "ColorTarget", "access": "write"}, ...]}
+
+# 仅找写入该资源的事件（写入者反查）
+find_draws_by_resource(resource_id="ResourceId::12345", usage_filter="write")
+
+# 仅找读取该资源的事件
+find_draws_by_resource(resource_id="ResourceId::12345", usage_filter="read")
 ```
+
+`usage` 字段是 RenderDoc 的 `ResourceUsage` 枚举名（`ColorTarget` / `DepthStencilTarget` / `PS_Resource` / `*_RWResource` / `CopyDst` / `GenMips` / `VertexBuffer` / 等）。
+`access` 字段是基于 usage 的二分类：`write` / `read` / `other`（少数特殊用法如 `Barrier`）。
+当事件通过 view 访问资源时，附加 `view` 字段（view ResourceId，如 SRV/RTV/UAV 句柄）。
 
 ### GPU 计时获取
 
@@ -188,10 +199,42 @@ export_shader(event_id=100, stage="pixel")
 export_shader(event_id=100, stage="pixel", disassembly_target="SPIR-V")
 # → {"url": "...", "disassembly_target": "SPIR-V (IL)", ...}
 
-# 导出 Mesh 为 OBJ
+# 导出 Mesh 为 OBJ（自动探测引擎；失败则返回结构化错误）
 export_mesh(event_id=100)
-# → {"url": "...", "vertex_count": 1500, "face_count": 3000, ...}
+# → 成功: {"url": "...", "vertex_count": 1500, "source_engine": "unity", "source_engine_source": "detected", ...}
+# → 失败: {"error": "engine_detection_failed", "valid_values": [...], "detection_info": {...}}
+
+# 显式指定引擎（推荐用于 Android 模拟器 / ANGLE 抓帧）
+export_mesh(event_id=100, source_engine="unity")
+
+# 直接覆盖 flip 参数（高级用法，优先级高于 source_engine）
+export_mesh(event_id=100, flip_uv_v=False, flip_handedness=True)
 ```
+
+### export_mesh 坐标/UV 约定
+
+抓帧图形 API（GL / Vulkan / D3D）**不能唯一决定**顶点缓冲里顶点数据的物体空间手性和 UV 方向——那是源**引擎**决定的。典型例子：
+- Unity 在 GL ES / Vulkan / D3D 上都输出 LH 物体空间 + V-up UV
+- Android 模拟器（MuMu / LDPlayer / NoxPlayer）用 ANGLE 把 Unity 的 GL ES 翻译为 Vulkan，抓到的 "Vulkan" 仍是 Unity 约定
+- 但 ANGLE 会剥光所有 Unity 命名标识，事后靠 shader 反射扫名字会失败
+
+因此 `export_mesh` 按 **源引擎** 选约定：
+
+| source_engine | flip_handedness | flip_uv_v | 说明 |
+|---------------|-----------------|-----------|------|
+| `unity` | True | False | LH 物体空间 + V-up UV |
+| `unreal` | True | True | LH + V-down |
+| `native_gl` | False | False | 原生 OpenGL：RH + V-up |
+| `native_d3d` | True | True | 原生 D3D：LH + V-down |
+| `native_vulkan` | True | True | 原生 Vulkan：LH + V-down |
+
+#### 自动探测（`source_engine="auto"` 或省略）
+
+只执行**高可信度**两层探测：
+1. **模块名**：扫描抓帧 `StructuredFile` chunk，匹配 `libunity.so` / `UnityPlayer.dll` / `libUE4.so` 等
+2. **Shader 反射标识符**：扫 cbuffer 名 / 变量名 / 资源名，匹配 `UnityPerDraw` / `unity_ObjectToWorld` / `View_WorldToClip` 等
+
+两层都没命中时**不做模糊兜底**——返回结构化错误，调用方（LLM）根据 `detection_info`（含 `shader_generator` / `capture_filename` / `api` 等）自行判断或询问用户。
 
 ## 通信协议
 
